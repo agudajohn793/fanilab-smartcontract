@@ -18,6 +18,11 @@ export const FleetErrorCodes = {
   FleetInactive: 10,
   InvalidConfiguration: 11,
   InternalStorageError: 12,
+  DriverNotRegistered: 13,
+  RosterFull: 14,
+  NoPendingContractChange: 15,
+  ContractChangeTimelockNotElapsed: 16,
+  NoPendingOwnerReassignment: 17,
 } as const;
 
 export interface RegisterFleetParams {
