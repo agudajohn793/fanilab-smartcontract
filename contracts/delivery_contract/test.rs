@@ -2313,6 +2313,20 @@ fn test_get_identity_reputation_contract_returns_none_before_configuration() {
 }
 
 #[test]
+fn test_mark_in_transit_succeeds_without_identity_contract() {
+    let env = Env::default();
+    let (client, admin) = setup_bare(&env);
+    let driver = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let delivery_id = client.create_delivery(&admin, &recipient, &get_test_metadata(&env, 1));
+
+    client.assign_driver(&admin, &delivery_id, &driver);
+    client.mark_in_transit(&driver, &delivery_id);
+
+    assert_eq!(client.get_delivery(&delivery_id).status, DeliveryStatus::InTransit);
+}
+
+#[test]
 fn test_set_and_get_identity_reputation_contract_round_trip() {
     let env = Env::default();
     let (client, admin) = setup_bare(&env);
@@ -2790,4 +2804,3 @@ fn test_assign_driver_succeeds_registered_active_driver() {
         DeliveryStatus::Active
     );
 }
-
