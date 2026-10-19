@@ -278,11 +278,7 @@ impl IdentityReputationContract {
     pub fn register_driver(env: Env, driver: Address) -> DriverProfile {
         driver.require_auth();
         let key = DataKey::DriverProfile(driver.clone());
-        if let Some(existing) = env
-            .storage()
-            .persistent()
-            .get::<_, DriverProfile>(&key)
-        {
+        if let Some(existing) = env.storage().persistent().get::<_, DriverProfile>(&key) {
             return existing;
         }
 
@@ -473,13 +469,13 @@ impl IdentityReputationContract {
         );
     }
 
-    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     /// Penalize a driver by `points` (e.g. after an adverse dispute ruling).
     ///
     /// Deliberately **not** gated on driver suspension: penalties must still
     /// land while a driver is suspended, otherwise suspension would shield
     /// wrongdoers from punishment. Only the reputation-minting entry points
     /// (`increase_reputation`, `award_reputation`) freeze on suspension.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn decrease_reputation(env: Env, caller: Address, driver: Address, points: u32) {
         require_escrow_not_paused(&env);
         if !Self::is_authorized_contract(env.clone(), caller.clone()) {

@@ -239,8 +239,8 @@ fn test_execute_settlement_swap_rejects_non_escrow_caller() {
     let token = Address::generate(&env);
     let recipient = Address::generate(&env);
 
-    let result =
-        client.try_execute_settlement_swap(&intruder, &token, &token, &recipient, &100i128, &90i128);
+    let result = client
+        .try_execute_settlement_swap(&intruder, &token, &token, &recipient, &100i128, &90i128);
     match result {
         Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected Unauthorized for a non-escrow caller"),
