@@ -47,13 +47,12 @@ const _: () = {
 };
 
 const MIN_DISPUTE_TIME_LIMIT: u64 = 86400; // 1 day in seconds
+const MAX_DISPUTE_WINDOW: u64 = 365 * 24 * 60 * 60; // 1 year
 
 /// Lower bound for the dispute *resolution* window (the delay before any party
 /// may `force_resolve_dispute`). Mirrors `MIN_DISPUTE_TIME_LIMIT`: parties must
 /// always have at least a day to reach a verdict before the automatic fallback
-/// split can be forced. No upper bound is imposed — an over-long window only
-/// delays a safety-valve fallback and creates no attack surface for the trusted
-/// admin, so bounding it further would add friction without protection.
+/// split can be forced. Both dispute windows are capped at one year.
 const MIN_DISPUTE_RESOLUTION_LIMIT: u64 = 86400; // 1 day in seconds
 
 /// Maximum number of evidence hashes a single party may attach to one dispute.
@@ -224,10 +223,11 @@ impl DisputeResolutionContract {
             panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         admin.require_auth();
-        if dispute_time_limit < MIN_DISPUTE_TIME_LIMIT {
+        if !(MIN_DISPUTE_TIME_LIMIT..=MAX_DISPUTE_WINDOW).contains(&dispute_time_limit) {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
-        if dispute_resolution_limit < MIN_DISPUTE_RESOLUTION_LIMIT {
+        if !(MIN_DISPUTE_RESOLUTION_LIMIT..=MAX_DISPUTE_WINDOW).contains(&dispute_resolution_limit)
+        {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
         env.storage()
@@ -619,7 +619,7 @@ impl DisputeResolutionContract {
         // Same floor init enforces: never let the resolution window drop below
         // one day, or a dispute could be force-resolved out from under the
         // parties before they have any chance to reach a verdict.
-        if new_limit < MIN_DISPUTE_RESOLUTION_LIMIT {
+        if !(MIN_DISPUTE_RESOLUTION_LIMIT..=MAX_DISPUTE_WINDOW).contains(&new_limit) {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let old_limit = Self::get_dispute_resolution_limit(env.clone());
@@ -643,7 +643,7 @@ impl DisputeResolutionContract {
         // The one-day floor is an invariant, not just a construction-time check:
         // enforce it here too, or an admin could set it to 0 and close the
         // post-delivery dispute window for every delivery in a single call.
-        if new_limit < MIN_DISPUTE_TIME_LIMIT {
+        if !(MIN_DISPUTE_TIME_LIMIT..=MAX_DISPUTE_WINDOW).contains(&new_limit) {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let old_limit = Self::get_dispute_time_limit(env.clone());

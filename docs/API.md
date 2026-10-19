@@ -1593,14 +1593,14 @@ Initialize the dispute resolution contract.
 - `admin: Address` - Initial admin address
 - `delivery_contract: Address` - Address of the delivery contract
 - `escrow_contract: Address` - Address of the escrow contract
-- `dispute_time_limit: u64` - Seconds after delivery within which a dispute may be raised (must be ≥ `MIN_DISPUTE_TIME_LIMIT`, 1 day)
-- `dispute_resolution_limit: u64` - Seconds a dispute may stay `Open` before any party may `force_resolve_dispute` (must be ≥ `MIN_DISPUTE_RESOLUTION_LIMIT`, 1 day)
+- `dispute_time_limit: u64` - Seconds after delivery within which a dispute may be raised (1 day to 365 days)
+- `dispute_resolution_limit: u64` - Seconds a dispute may stay `Open` before any party may `force_resolve_dispute` (1 day to 365 days)
 
 **Authorization:** Contract deployer
 
 **Errors:**
 - `AlreadyInitialized` - Contract has already been initialized
-- `InvalidState` - `dispute_time_limit` or `dispute_resolution_limit` is below its floor
+- `InvalidState` - Either dispute window is outside the 1-day to 365-day range
 
 ### Admin Operations
 
@@ -1752,7 +1752,7 @@ Set the dispute auto-resolution window.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
-- `InvalidState` - `new_limit` is below `MIN_DISPUTE_RESOLUTION_LIMIT` (86400 seconds)
+- `InvalidState` - `new_limit` is outside 86400 to 31536000 seconds (1 day to 365 days)
 
 #### `update_dispute_time_limit`
 Update the post-delivery dispute window.
@@ -1765,7 +1765,7 @@ Update the post-delivery dispute window.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
-- `InvalidState` - `new_limit` is below `MIN_DISPUTE_TIME_LIMIT` (86400 seconds)
+- `InvalidState` - `new_limit` is outside 86400 to 31536000 seconds (1 day to 365 days)
 
 ### Query Functions
 

@@ -1764,6 +1764,55 @@ fn test_init_with_minimum_dispute_time_limit() {
     assert_eq!(limit, 86400);
 }
 
+#[test]
+fn test_dispute_window_limits_enforce_one_year_maximum() {
+    let (env, admin, _, _, _, delivery, escrow, dispute_client) = setup_test();
+    dispute_client.update_dispute_time_limit(&admin, &MAX_DISPUTE_WINDOW);
+    dispute_client.set_dispute_resolution_limit(&admin, &MAX_DISPUTE_WINDOW);
+    assert_eq!(dispute_client.get_dispute_time_limit(), MAX_DISPUTE_WINDOW);
+    assert_eq!(
+        dispute_client.get_dispute_resolution_limit(),
+        MAX_DISPUTE_WINDOW
+    );
+
+    let over_limit = MAX_DISPUTE_WINDOW + 1;
+    let time_result = dispute_client.try_update_dispute_time_limit(&admin, &over_limit);
+    assert!(time_result.is_err());
+    let resolution_result = dispute_client.try_set_dispute_resolution_limit(&admin, &over_limit);
+    assert!(resolution_result.is_err());
+
+    assert_eq!(dispute_client.get_dispute_time_limit(), MAX_DISPUTE_WINDOW);
+    assert_eq!(
+        dispute_client.get_dispute_resolution_limit(),
+        MAX_DISPUTE_WINDOW
+    );
+
+    let invalid_contract = env.register(DisputeResolutionContract, ());
+    let invalid_client = DisputeResolutionContractClient::new(&env, &invalid_contract);
+    let init_result = invalid_client.try_init(
+        &admin,
+        &delivery,
+        &escrow,
+        &(MAX_DISPUTE_WINDOW + 1),
+        &MAX_DISPUTE_WINDOW,
+    );
+    match init_result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected InvalidState for an over-limit init value, got {other:?}"),
+    }
+    let resolution_init_result = invalid_client.try_init(
+        &admin,
+        &delivery,
+        &escrow,
+        &MAX_DISPUTE_WINDOW,
+        &(MAX_DISPUTE_WINDOW + 1),
+    );
+    match resolution_init_result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected InvalidState for an over-limit resolution value, got {other:?}"),
+    }
+}
+
 // ── SPLIT RESOLUTION PRECONDITION (Issue #22) ────────────────────────────────
 
 #[test]
