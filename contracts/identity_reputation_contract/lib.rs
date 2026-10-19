@@ -3,8 +3,8 @@
 use shared_types::{
     events, is_admin, ttl, DriverProfile, DriverRegisteredEvent, DriverReinstatedEvent,
     DriverStatus, DriverSuspendedEvent, FaniLabError, KycStatusUpdatedEvent,
-    ReputationAwardedEvent, ReputationDecreasedEvent, ReputationIncreasedEvent, StorageKey,
-    UserProfile, UserRegisteredEvent,
+    PendingPeerContractChange, ReputationAwardedEvent, ReputationDecreasedEvent,
+    ReputationIncreasedEvent, StorageKey, UserProfile, UserRegisteredEvent,
 };
 use soroban_sdk::{contract, contractimpl, contracttype, panic_with_error, Address, Env};
 
@@ -23,6 +23,7 @@ pub enum DataKey {
     DriverProfile(Address),
     AuthorizedContract(Address),
     DeliveryContract,
+    PendingDeliveryContract,
     DisputeContract,
     EscrowContract,
     ReputationConfig,
@@ -196,13 +197,58 @@ impl IdentityReputationContract {
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingDeliveryContract,
+            &PendingPeerContractChange {
+                address: delivery_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
+        env.storage().instance().extend_ttl(
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "delivery_contract_change_proposed"),),
+            (admin, delivery_contract, activates_at),
+        );
+    }
+
+    #[allow(deprecated)]
+    pub fn confirm_delivery_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FaniLabError::ContractChangeTimelockNotElapsed);
+        }
         env.storage()
             .instance()
-            .set(&DataKey::DeliveryContract, &delivery_contract);
+            .set(&DataKey::DeliveryContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingDeliveryContract);
+        env.storage().instance().extend_ttl(
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
         env.events().publish(
             (events::delivery_contract_updated(&env),),
-            (admin, delivery_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_delivery_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)

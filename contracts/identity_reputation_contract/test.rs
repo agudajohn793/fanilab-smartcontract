@@ -530,6 +530,8 @@ fn test_admin_can_repoint_cross_contracts() {
     let new_delivery_contract = Address::generate(&env);
     let new_dispute_contract = Address::generate(&env);
     client.set_delivery_contract(&admin, &new_delivery_contract);
+    env.ledger().set_timestamp(env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+    client.confirm_delivery_contract();
     client.set_dispute_contract(&admin, &new_dispute_contract);
     // Repointing the canonical addresses doesn't implicitly authorize them —
     // the allowlist is a separate, explicitly-managed mechanism (see init's
@@ -567,6 +569,10 @@ fn test_set_delivery_contract_publishes_event() {
     let new_contract = Address::generate(&env);
 
     client.set_delivery_contract(&admin, &new_contract);
+
+    env.ledger().set_timestamp(env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+
+    client.confirm_delivery_contract();
     assert_last_topic(&env, "delivery_contract_updated");
 }
 
@@ -647,6 +653,8 @@ fn test_deauthorized_caller_is_rejected() {
 
     let new_delivery_contract = Address::generate(&env);
     client.set_delivery_contract(&admin, &new_delivery_contract);
+    env.ledger().set_timestamp(env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+    client.confirm_delivery_contract();
     // Repointing alone doesn't revoke the old address — the allowlist is
     // managed explicitly, so the supersession must be done here too.
     client.set_authorized_contract(&admin, &delivery_contract, &false);

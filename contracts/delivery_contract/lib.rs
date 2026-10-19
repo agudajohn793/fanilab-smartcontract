@@ -4,6 +4,7 @@ use shared_types::FaniLabError;
 use shared_types::{
     delivery_key, events, is_admin, ttl, DeliveryConfirmedEvent, DeliveryCreatedEvent,
     DeliveryDisputedEvent, DeliveryMetadata, DriverAssignedEvent, DriverProfile, StorageKey,
+    PendingPeerContractChange,
 };
 pub use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus};
 use soroban_sdk::{
@@ -71,6 +72,7 @@ pub enum DataKey {
     /// Added in Issue #444 so `raise_dispute` can be gated on the real caller
     /// instead of trusting a self-declared `caller` argument.
     DisputeResolutionContract,
+    PendingEscrowContract,
     /// When `true`, `assign_driver` requires the driver to have
     /// `kyc_verified = true` in the identity contract before assignment is
     /// permitted.  Defaults to `false` so existing deployments and test
@@ -124,6 +126,8 @@ pub enum DeliveryError {
     /// `Locked` state, at a point where funded escrow is a precondition
     /// (currently: the `Active -> InTransit` transition). See Issue #298.
     EscrowNotLocked = 6,
+    NoPendingContractChange = 7,
+    ContractChangeTimelockNotElapsed = 8,
 }
 
 mod constants {
@@ -266,6 +270,10 @@ impl DeliveryContract {
             .get(&DataKey::DisputeResolutionContract)
     }
 
+    /// Propose an escrow contract address for this delivery contract's
+    /// escrow-backed operations. Changes require a three-day review period
+    /// followed by separate confirmation.
+    ///
     /// Update the escrow contract this delivery contract cross-calls for every
     /// escrow-backed operation (funding, refunds, releases, disputes).
     ///
@@ -279,17 +287,56 @@ impl DeliveryContract {
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::EscrowContract, &escrow_contract);
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: escrow_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, escrow_contract, activates_at),
+        );
+    }
 
+    #[allow(deprecated)]
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, DeliveryError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, DeliveryError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // Emit audit event so off-chain monitors can detect escrow rotations
         // (Issue #540).
         env.events()
-            .publish((events::delivery_contract_updated(&env),), (admin, escrow_contract));
+            .publish((events::delivery_contract_updated(&env),), (pending.proposed_by, pending.address));
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     pub fn get_identity_reputation_contract(env: Env) -> Option<Address> {

@@ -27,6 +27,21 @@ pub enum FaniLabError {
     /// Requested operation would exceed a fixed capacity/growth limit
     /// (e.g. a bounded collection is already at its maximum length).
     LimitExceeded = 12,
+    /// No peer-contract address change is waiting for confirmation.
+    NoPendingContractChange = 13,
+    /// A peer-contract address change is still within its review period.
+    ContractChangeTimelockNotElapsed = 14,
+}
+
+/// Review window applied to changes of cross-contract dependencies.
+pub const PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingPeerContractChange {
+    pub address: Address,
+    pub proposed_by: Address,
+    pub activates_at: u64,
 }
 
 // Event topic constants for on-chain event tracking
