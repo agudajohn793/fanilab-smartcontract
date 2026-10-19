@@ -33,6 +33,12 @@ pub enum FaniLabError {
 pub mod events {
     use soroban_sdk::{Env, Symbol};
 
+    // Every event topic in this module has a matching exported `pub const`
+    // string identifier so off-chain indexers and cross-contract callers can
+    // reference topics by name instead of duplicating inline string literals
+    // (which drift silently when a topic is renamed).
+
+    // Delivery / escrow lifecycle topics
     pub const DELIVERY_CREATED: &str = "delivery_created";
     pub const ESCROW_FUNDED: &str = "escrow_funded";
     pub const DRIVER_ASSIGNED: &str = "driver_assigned";
@@ -41,6 +47,55 @@ pub mod events {
     pub const ESCROW_RELEASED: &str = "escrow_released";
     pub const DELIVERY_DISPUTED: &str = "delivery_disputed";
     pub const ESCROW_REFUNDED: &str = "escrow_refunded";
+    pub const DISPUTE_RESOLVED: &str = "dispute_resolved";
+    pub const DELIVERY_CANCELLED: &str = "delivery_cancelled";
+    pub const DELIVERY_IN_TRANSIT: &str = "delivery_in_transit";
+
+    // Fleet management topics
+    pub const FLEET_REGISTERED: &str = "fleet_registered";
+    pub const FLEET_TREASURY_UPDATED: &str = "fleet_treasury_updated";
+    pub const FLEET_TREASURY_CHANGE_PROPOSED: &str = "fleet_treasury_change_proposed";
+    pub const DRIVER_INVITED: &str = "driver_invited";
+    pub const INVITE_ACCEPTED: &str = "invite_accepted";
+    pub const DRIVER_REMOVED: &str = "driver_removed";
+    pub const PAYOUT_ROUTING_FALLBACK: &str = "payout_routing_fallback";
+    pub const FLEET_DEACTIVATED: &str = "fleet_deactivated";
+    pub const FLEET_REACTIVATED: &str = "fleet_reactivated";
+    pub const FLEET_OWNER_REASSIGNED: &str = "fleet_owner_reassigned";
+    pub const FLEET_TREASURY_FORCE_UPDATED: &str = "fleet_treasury_force_updated";
+
+    // Dispute resolution topics
+    pub const DISPUTE_RAISED: &str = "dispute_raised";
+    pub const EVIDENCE_ADDED: &str = "evidence_added";
+    pub const DISPUTE_RESOLVED_REFUND: &str = "dispute_resolved_refund";
+    pub const DISPUTE_RESOLVED_SPLIT: &str = "dispute_resolved_split";
+    pub const DISPUTE_RESOLVED_PAYOUT: &str = "dispute_resolved_payout";
+
+    // Identity and reputation topics
+    pub const DRIVER_REGISTERED: &str = "driver_registered";
+    pub const DRIVER_SUSPENDED: &str = "driver_suspended";
+    pub const DRIVER_REINSTATED: &str = "driver_reinstated";
+    pub const USER_REGISTERED: &str = "user_registered";
+    pub const KYC_STATUS_UPDATED: &str = "kyc_status_updated";
+    pub const REPUTATION_INCREASED: &str = "reputation_increased";
+    pub const REPUTATION_DECREASED: &str = "reputation_decreased";
+    pub const REPUTATION_AWARDED: &str = "reputation_awarded";
+    pub const AUTHORIZED_CONTRACT_UPDATED: &str = "authorized_contract_updated";
+    pub const DELIVERY_CONTRACT_UPDATED: &str = "delivery_contract_updated";
+    pub const DISPUTE_CONTRACT_UPDATED: &str = "dispute_contract_updated";
+    pub const REPUTATION_CONFIG_UPDATED: &str = "reputation_config_updated";
+
+    // Protocol/admin lifecycle topics
+    pub const PROTOCOL_INITIALIZED: &str = "protocol_initialized";
+    pub const FEE_UPDATED: &str = "fee_updated";
+    pub const SLIPPAGE_TOLERANCE_UPDATED: &str = "slippage_tolerance_updated";
+    pub const SETTLEMENT_CONTRACT_PROPOSED: &str = "settlement_contract_proposed";
+    pub const SETTLEMENT_CONTRACT_UPDATED: &str = "settlement_contract_updated";
+    pub const DRIVER_PREFERENCE_UPDATED: &str = "driver_preference_updated";
+    pub const ESCROW_CONTRACT_UPDATED: &str = "escrow_contract_updated";
+    pub const ADMIN_TRANSFERRED: &str = "admin_transferred";
+    pub const PROTOCOL_PAUSE_STATUS_CHANGED: &str = "protocol_pause_status_changed";
+    pub const DELIVERY_CONTRACT_INITIALIZED: &str = "delivery_contract_initialized";
 
     pub fn delivery_created(env: &Env) -> Symbol {
         Symbol::new(env, DELIVERY_CREATED)
@@ -75,138 +130,138 @@ pub mod events {
     }
 
     pub fn dispute_resolved(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_resolved")
+        Symbol::new(env, DISPUTE_RESOLVED)
     }
 
     pub fn delivery_cancelled(env: &Env) -> Symbol {
-        Symbol::new(env, "delivery_cancelled")
+        Symbol::new(env, DELIVERY_CANCELLED)
     }
 
     pub fn delivery_in_transit(env: &Env) -> Symbol {
-        Symbol::new(env, "delivery_in_transit")
+        Symbol::new(env, DELIVERY_IN_TRANSIT)
     }
 
     // Fleet management events
     pub fn fleet_registered(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_registered")
+        Symbol::new(env, FLEET_REGISTERED)
     }
 
     pub fn fleet_treasury_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_treasury_updated")
+        Symbol::new(env, FLEET_TREASURY_UPDATED)
     }
 
     pub fn fleet_treasury_change_proposed(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_treasury_change_proposed")
+        Symbol::new(env, FLEET_TREASURY_CHANGE_PROPOSED)
     }
 
     pub fn driver_invited(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_invited")
+        Symbol::new(env, DRIVER_INVITED)
     }
 
     pub fn invite_accepted(env: &Env) -> Symbol {
-        Symbol::new(env, "invite_accepted")
+        Symbol::new(env, INVITE_ACCEPTED)
     }
 
     pub fn driver_removed(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_removed")
+        Symbol::new(env, DRIVER_REMOVED)
     }
 
     pub fn payout_routing_fallback(env: &Env) -> Symbol {
-        Symbol::new(env, "payout_routing_fallback")
+        Symbol::new(env, PAYOUT_ROUTING_FALLBACK)
     }
 
     pub fn fleet_deactivated(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_deactivated")
+        Symbol::new(env, FLEET_DEACTIVATED)
     }
 
     /// Emitted when a fleet is restored from Inactive back to Active status.
     pub fn fleet_reactivated(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_reactivated")
+        Symbol::new(env, FLEET_REACTIVATED)
     }
 
     /// Emitted when the contract admin reassigns a fleet's owner address
     /// (e.g. after the original owner key is lost or compromised).
     pub fn fleet_owner_reassigned(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_owner_reassigned")
+        Symbol::new(env, FLEET_OWNER_REASSIGNED)
     }
 
     /// Emitted when the contract admin force-updates a fleet's treasury
     /// address, bypassing the normal owner-initiated timelock flow.
     pub fn fleet_treasury_force_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "fleet_treasury_force_updated")
+        Symbol::new(env, FLEET_TREASURY_FORCE_UPDATED)
     }
 
     // Dispute resolution events
     pub fn dispute_raised(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_raised")
+        Symbol::new(env, DISPUTE_RAISED)
     }
 
     pub fn evidence_added(env: &Env) -> Symbol {
-        Symbol::new(env, "evidence_added")
+        Symbol::new(env, EVIDENCE_ADDED)
     }
 
     pub fn dispute_resolved_refund(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_resolved_refund")
+        Symbol::new(env, DISPUTE_RESOLVED_REFUND)
     }
 
     pub fn dispute_resolved_split(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_resolved_split")
+        Symbol::new(env, DISPUTE_RESOLVED_SPLIT)
     }
 
     pub fn dispute_resolved_payout(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_resolved_payout")
+        Symbol::new(env, DISPUTE_RESOLVED_PAYOUT)
     }
 
     // Identity and reputation events
     pub fn driver_registered(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_registered")
+        Symbol::new(env, DRIVER_REGISTERED)
     }
 
     pub fn driver_suspended(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_suspended")
+        Symbol::new(env, DRIVER_SUSPENDED)
     }
 
     pub fn driver_reinstated(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_reinstated")
+        Symbol::new(env, DRIVER_REINSTATED)
     }
 
     pub fn user_registered(env: &Env) -> Symbol {
-        Symbol::new(env, "user_registered")
+        Symbol::new(env, USER_REGISTERED)
     }
 
     pub fn kyc_status_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "kyc_status_updated")
+        Symbol::new(env, KYC_STATUS_UPDATED)
     }
 
     pub fn reputation_increased(env: &Env) -> Symbol {
-        Symbol::new(env, "reputation_increased")
+        Symbol::new(env, REPUTATION_INCREASED)
     }
 
     pub fn reputation_decreased(env: &Env) -> Symbol {
-        Symbol::new(env, "reputation_decreased")
+        Symbol::new(env, REPUTATION_DECREASED)
     }
 
     pub fn reputation_awarded(env: &Env) -> Symbol {
-        Symbol::new(env, "reputation_awarded")
+        Symbol::new(env, REPUTATION_AWARDED)
     }
 
     // Identity/admin configuration events (Issue #465). These privileged
     // setters control which contracts may mint or slash reputation and how
     // scores are computed, so every change must be observable on-chain.
     pub fn authorized_contract_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "authorized_contract_updated")
+        Symbol::new(env, AUTHORIZED_CONTRACT_UPDATED)
     }
 
     pub fn delivery_contract_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "delivery_contract_updated")
+        Symbol::new(env, DELIVERY_CONTRACT_UPDATED)
     }
 
     pub fn dispute_contract_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "dispute_contract_updated")
+        Symbol::new(env, DISPUTE_CONTRACT_UPDATED)
     }
 
     pub fn reputation_config_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "reputation_config_updated")
+        Symbol::new(env, REPUTATION_CONFIG_UPDATED)
     }
 
     // Protocol/admin lifecycle events. These previously used raw inline
@@ -214,51 +269,51 @@ pub mod events {
     // instead of going through this module, the one place in the codebase
     // that mixed casing conventions for event topics (Issue #47).
     pub fn protocol_initialized(env: &Env) -> Symbol {
-        Symbol::new(env, "protocol_initialized")
+        Symbol::new(env, PROTOCOL_INITIALIZED)
     }
 
     pub fn fee_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "fee_updated")
+        Symbol::new(env, FEE_UPDATED)
     }
 
     /// Emitted by `escrow_contract::update_slippage_tolerance` so indexers
     /// can track protocol slippage-constraint history off-chain (Issue #469).
     pub fn slippage_tolerance_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "slippage_tolerance_updated")
+        Symbol::new(env, SLIPPAGE_TOLERANCE_UPDATED)
     }
 
     pub fn settlement_contract_proposed(env: &Env) -> Symbol {
         // Soroban Symbol values are capped at 32 bytes; the fuller
         // "settlement_contract_change_proposed" (35 bytes) exceeds that.
-        Symbol::new(env, "settlement_contract_proposed")
+        Symbol::new(env, SETTLEMENT_CONTRACT_PROPOSED)
     }
 
     pub fn settlement_contract_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "settlement_contract_updated")
+        Symbol::new(env, SETTLEMENT_CONTRACT_UPDATED)
     }
 
     /// Emitted by `settlement_contract::set_driver_preference` so indexers
     /// can track driver payout preference changes (Issue #589).
     pub fn driver_preference_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "driver_preference_updated")
+        Symbol::new(env, DRIVER_PREFERENCE_UPDATED)
     }
 
     /// Emitted by `settlement_contract::set_escrow_contract` so indexers can
     /// track escrow contract address rotations (Issue #588).
     pub fn escrow_contract_updated(env: &Env) -> Symbol {
-        Symbol::new(env, "escrow_contract_updated")
+        Symbol::new(env, ESCROW_CONTRACT_UPDATED)
     }
 
     pub fn admin_transferred(env: &Env) -> Symbol {
-        Symbol::new(env, "admin_transferred")
+        Symbol::new(env, ADMIN_TRANSFERRED)
     }
 
     pub fn protocol_pause_status_changed(env: &Env) -> Symbol {
-        Symbol::new(env, "protocol_pause_status_changed")
+        Symbol::new(env, PROTOCOL_PAUSE_STATUS_CHANGED)
     }
 
     pub fn delivery_contract_initialized(env: &Env) -> Symbol {
-        Symbol::new(env, "delivery_contract_initialized")
+        Symbol::new(env, DELIVERY_CONTRACT_INITIALIZED)
     }
 }
 
@@ -850,13 +905,13 @@ pub struct DeliveryMetadata {
 #[cfg(test)]
 mod test {
     use super::{
-        delivery_key, escrow_key, CargoCategory, CargoDescriptor, DeliveryConfirmedEvent,
+        delivery_key, escrow_key, events, CargoCategory, CargoDescriptor, DeliveryConfirmedEvent,
         DeliveryCreatedEvent, DeliveryDisputedEvent, DeliveryId, DeliveryMetadata, DeliveryRecord,
         DeliveryStatus, DriverAssignedEvent, DriverProfile, DriverStatus, EscrowFundedEvent,
         EscrowRecord, EscrowRefundedEvent, EscrowReleasedEvent, EscrowState, FaniLabError,
         ProtocolConfig, StorageKey, UserProfile,
     };
-    use soroban_sdk::{contract, testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{contract, testutils::Address as _, Address, Env, String, Symbol};
 
     // `is_admin` is a free function reading instance storage, which SDK 27
     // only allows from within a contract's execution context — this minimal
@@ -1264,5 +1319,78 @@ mod test {
 
         assert_eq!(profile.address, address);
         assert_eq!(profile.registered_at, 2000000);
+    }
+
+    /// Every exported event-topic const must produce the exact `Symbol` its
+    /// helper function publishes. Indexers and off-chain tooling filter on the
+    /// const strings, so const/function drift would silently break event
+    /// subscriptions.
+    #[test]
+    fn event_topic_consts_match_helper_symbols() {
+        let env = Env::default();
+        macro_rules! check {
+            ($($const_name:ident => $fn_name:ident,)*) => {
+                $(
+                    assert_eq!(
+                        Symbol::new(&env, events::$const_name),
+                        events::$fn_name(&env),
+                        "event topic const {} drifted from helper {}",
+                        stringify!($const_name),
+                        stringify!($fn_name),
+                    );
+                )*
+            };
+        }
+        check! {
+            DELIVERY_CREATED => delivery_created,
+            ESCROW_FUNDED => escrow_funded,
+            DRIVER_ASSIGNED => driver_assigned,
+            DELIVERY_CONFIRMED => delivery_confirmed,
+            DELIVERY_METADATA_UPDATED => delivery_metadata_updated,
+            ESCROW_RELEASED => escrow_released,
+            DELIVERY_DISPUTED => delivery_disputed,
+            ESCROW_REFUNDED => escrow_refunded,
+            DISPUTE_RESOLVED => dispute_resolved,
+            DELIVERY_CANCELLED => delivery_cancelled,
+            DELIVERY_IN_TRANSIT => delivery_in_transit,
+            FLEET_REGISTERED => fleet_registered,
+            FLEET_TREASURY_UPDATED => fleet_treasury_updated,
+            FLEET_TREASURY_CHANGE_PROPOSED => fleet_treasury_change_proposed,
+            DRIVER_INVITED => driver_invited,
+            INVITE_ACCEPTED => invite_accepted,
+            DRIVER_REMOVED => driver_removed,
+            PAYOUT_ROUTING_FALLBACK => payout_routing_fallback,
+            FLEET_DEACTIVATED => fleet_deactivated,
+            FLEET_REACTIVATED => fleet_reactivated,
+            FLEET_OWNER_REASSIGNED => fleet_owner_reassigned,
+            FLEET_TREASURY_FORCE_UPDATED => fleet_treasury_force_updated,
+            DISPUTE_RAISED => dispute_raised,
+            EVIDENCE_ADDED => evidence_added,
+            DISPUTE_RESOLVED_REFUND => dispute_resolved_refund,
+            DISPUTE_RESOLVED_SPLIT => dispute_resolved_split,
+            DISPUTE_RESOLVED_PAYOUT => dispute_resolved_payout,
+            DRIVER_REGISTERED => driver_registered,
+            DRIVER_SUSPENDED => driver_suspended,
+            DRIVER_REINSTATED => driver_reinstated,
+            USER_REGISTERED => user_registered,
+            KYC_STATUS_UPDATED => kyc_status_updated,
+            REPUTATION_INCREASED => reputation_increased,
+            REPUTATION_DECREASED => reputation_decreased,
+            REPUTATION_AWARDED => reputation_awarded,
+            AUTHORIZED_CONTRACT_UPDATED => authorized_contract_updated,
+            DELIVERY_CONTRACT_UPDATED => delivery_contract_updated,
+            DISPUTE_CONTRACT_UPDATED => dispute_contract_updated,
+            REPUTATION_CONFIG_UPDATED => reputation_config_updated,
+            PROTOCOL_INITIALIZED => protocol_initialized,
+            FEE_UPDATED => fee_updated,
+            SLIPPAGE_TOLERANCE_UPDATED => slippage_tolerance_updated,
+            SETTLEMENT_CONTRACT_PROPOSED => settlement_contract_proposed,
+            SETTLEMENT_CONTRACT_UPDATED => settlement_contract_updated,
+            DRIVER_PREFERENCE_UPDATED => driver_preference_updated,
+            ESCROW_CONTRACT_UPDATED => escrow_contract_updated,
+            ADMIN_TRANSFERRED => admin_transferred,
+            PROTOCOL_PAUSE_STATUS_CHANGED => protocol_pause_status_changed,
+            DELIVERY_CONTRACT_INITIALIZED => delivery_contract_initialized,
+        }
     }
 }
