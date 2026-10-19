@@ -1,7 +1,34 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, token, Address, Env};
+
+#[contract]
+struct MockSwapRouter;
+
+#[contractimpl]
+impl MockSwapRouter {
+    pub fn swap_exact_tokens_for_tokens(
+        env: Env,
+        caller: Address,
+        from_token: Address,
+        to_token: Address,
+        recipient: Address,
+        amount: i128,
+        _min_amount_out: i128,
+    ) -> i128 {
+        let router = env.current_contract_address();
+        token::Client::new(&env, &from_token).transfer_from(
+            &router,
+            &caller,
+            &router,
+            &amount,
+        );
+        let amount_out = amount * 2;
+        token::Client::new(&env, &to_token).transfer(&router, &recipient, &amount_out);
+        amount_out
+    }
+}
 
 #[test]
 fn test_get_driver_preference_returns_none_when_unset() {
@@ -149,4 +176,40 @@ fn test_clear_driver_preference_removes() {
 
     client.clear_driver_preference(&driver);
     assert_eq!(client.get_driver_preference(&driver), None);
+}
+
+#[test]
+fn test_execute_settlement_swap_uses_configured_router() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let escrow = Address::generate(&env);
+    let router = env.register_contract(None, MockSwapRouter);
+    let input_admin = Address::generate(&env);
+    let output_admin = Address::generate(&env);
+    let from_token = env
+        .register_stellar_asset_contract_v2(input_admin.clone())
+        .address();
+    let to_token = env
+        .register_stellar_asset_contract_v2(output_admin.clone())
+        .address();
+    let recipient = Address::generate(&env);
+
+    client.init(&admin, &escrow);
+    client.set_swap_router(&admin, &router);
+    token::StellarAssetClient::new(&env, &from_token).mint(&contract_id, &100);
+    token::StellarAssetClient::new(&env, &to_token).mint(&router, &200);
+
+    client.execute_settlement_swap(&escrow, &from_token, &to_token, &recipient, &100, &190);
+
+    assert_eq!(
+        token::Client::new(&env, &to_token).balance(&recipient),
+        200
+    );
+    assert_eq!(
+        token::Client::new(&env, &from_token).balance(&router),
+        100
+    );
 }

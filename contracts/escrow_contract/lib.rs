@@ -362,6 +362,11 @@ fn payout_driver(
                 let slippage_tolerance_bps: u32 = load_protocol_config(env).slippage_tolerance_bps;
                 let min_amount_out =
                     amount.saturating_mul(10000 - slippage_tolerance_bps as i128) / 10000;
+                token::Client::new(env, token).transfer(
+                    &env.current_contract_address(),
+                    &settlement_addr,
+                    &amount,
+                );
                 let _: () = env.invoke_contract(
                     &settlement_addr,
                     &Symbol::new(env, "execute_settlement_swap"),

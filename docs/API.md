@@ -2866,13 +2866,13 @@ Check whether a driver's reputation score meets the enterprise threshold (≥ 75
 
 ## Settlement Contract
 
-> **Phase 3 — Stub implementation.** The Settlement contract is deployed but its
-> functions are not yet implemented. Function signatures and intended behaviour
-> are documented here for integrator reference; the bodies will be filled in
-> during Phase 3 development.
-
 Handles cross-border currency swaps during escrow release, allowing drivers to
-receive payment in their preferred asset via the Stellar DEX or liquidity pools.
+receive payment in their preferred asset via an admin-configured swap router.
+The configured router must implement `swap_exact_tokens_for_tokens` with
+`(caller, from_token, to_token, recipient, amount, min_amount_out)` arguments
+and return the actual `amount_out`. It must consume the approved source amount
+and deliver output directly to `recipient`. The escrow funds the settlement
+contract immediately before invoking the swap.
 
 ### Initialization
 
@@ -2884,9 +2884,21 @@ Initialize the settlement contract.
 
 **Authorization:** Admin (must sign)
 
-> **Note:** Phase 3 stub — no state is persisted yet.
-
 ### Query Functions
+
+#### `set_swap_router`
+Configure the trusted swap router.
+
+**Parameters:**
+- `admin: Address` - Contract administrator (must sign)
+- `router: Address` - Router implementing the swap interface described above
+
+**Authorization:** Admin (must sign)
+
+#### `get_swap_router`
+Return the configured swap router, if one has been set.
+
+**Returns:** `Option<Address>`
 
 #### `get_driver_preference`
 Return the driver's preferred asset for payment, if one has been set.
@@ -2895,8 +2907,6 @@ Return the driver's preferred asset for payment, if one has been set.
 - `_driver: Address` - Driver address
 
 **Returns:** `Option<Address>`
-
-> **Note:** Phase 3 stub — always returns `None`.
 
 ### Settlement Operations
 
@@ -2909,16 +2919,22 @@ Intended to integrate with the Stellar DEX or a liquidity pool to convert
 
 **Parameters:**
 - `caller: Address` - Authorized caller (must sign)
-- `_from_token: Address` - Source token contract address
-- `_to_token: Address` - Target token contract address
-- `_recipient: Address` - Address receiving the swapped funds
-- `_amount: i128` - Amount of `from_token` to swap
-- `_min_amount_out: i128` - Minimum acceptable output (slippage guard)
+- `from_token: Address` - Source token contract address
+- `to_token: Address` - Target token contract address
+- `recipient: Address` - Address receiving the swapped funds
+- `amount: i128` - Amount of `from_token` to swap
+- `min_amount_out: i128` - Minimum acceptable output (slippage guard)
 
 **Authorization:** Caller (must sign)
 
-> **Note:** Phase 3 stub — no swap is performed.
-**Returns:** `Address` — fleet treasury if active, else driver's own address
+**Errors:**
+- `SwapRouterNotConfigured` - No router has been configured.
+- `InvalidSwapParameters` - Amount, token pair, or minimum output is invalid.
+- `InsufficientSwapBalance` - Settlement does not hold the requested input.
+- `SwapOutputBelowMinimum` - Router output is below `min_amount_out`.
+- `SwapInputNotConsumed` - Router did not consume the exact approved input.
+
+**Returns:** `()`
 
 #### `get_driver_fleet_status`
 Get driver's status in a fleet.
