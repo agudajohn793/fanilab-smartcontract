@@ -164,6 +164,22 @@ fn test_admin_reassign_fleet_owner_resets_signers() {
     client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    assert_eq!(
+        client
+            .get_pending_fleet_owner_reassignment(&fleet_id)
+            .unwrap()
+            .new_owner,
+        new_owner
+    );
+    let attacker = Address::generate(&env);
+    let wrong_acceptor = client.try_accept_fleet_owner_reassignment(&attacker, &fleet_id);
+    match wrong_acceptor {
+        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
+        _ => panic!("Expected only the proposed owner to accept reassignment"),
+    }
+    assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     let profile = client.get_fleet(&fleet_id);
     assert_eq!(profile.owner, new_owner);
@@ -187,6 +203,7 @@ fn test_admin_reassign_fleet_owner_requires_admin() {
     }
 
     assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    assert_eq!(client.get_pending_fleet_owner_reassignment(&fleet_id), None);
 }
 
 #[test]
@@ -224,6 +241,11 @@ fn test_admin_reassign_fleet_owner_clears_pending_treasury_change() {
     );
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    assert_eq!(
+        client.get_pending_treasury_update(&fleet_id).unwrap().treasury,
+        malicious_treasury
+    );
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     // The in-flight proposal is gone, so it can never be confirmed later.
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
@@ -248,6 +270,7 @@ fn test_admin_reassign_fleet_owner_without_pending_treasury_change() {
     let new_owner = Address::generate(&env);
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
     assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);

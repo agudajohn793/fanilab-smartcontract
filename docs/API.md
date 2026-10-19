@@ -269,6 +269,8 @@ escrow_contract.set_dispute_resolution_contract(
 #### `set_delivery_contract`
 Configure the delivery contract address that `create_escrow` and
 `create_escrows_batch` cross-call to verify delivery integrity (Issue #295).
+This call proposes a new address; the active address remains unchanged until
+the three-day review period elapses and `confirm_delivery_contract` is called.
 
 When configured, both creation entry points:
 1. Confirm that a delivery record for the supplied `delivery_id` exists
@@ -301,7 +303,15 @@ leave the delivery contract unconfigured.
 - `Unauthorized` - Caller is not the configured admin
 - `NotInitialized` - Contract has not been initialised
 
-**Events:** none (configuration change only)
+**Events:** `delivery_contract_change_proposed`; confirmation emits
+`delivery_contract_updated`.
+
+#### `confirm_delivery_contract`
+Apply the pending delivery contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 **Example:**
 ```rust
@@ -1344,7 +1354,9 @@ delivery_contract.reclaim_delivery_expired_escrow(&delivery_id);
 #### `set_escrow_contract`
 Point the delivery contract at the escrow contract it should call. Unlike the
 escrow address supplied to `init`, this may be re-pointed later, which is how
-a redeployed escrow contract is adopted without redeploying deliveries.
+a redeployed escrow contract is adopted without redeploying deliveries. This
+call proposes a new address; the active address changes only after three days
+and a separate `confirm_escrow_contract` call.
 
 **Parameters:**
 - `admin: Address` - Admin address
@@ -1354,6 +1366,16 @@ a redeployed escrow contract is adopted without redeploying deliveries.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
+
+**Events:** `escrow_contract_change_proposed`; confirmation emits the existing
+escrow-update event.
+
+#### `confirm_escrow_contract`
+Apply the pending escrow contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 **Notes:**
 - Existing escrows are unaffected; only the address used for future
@@ -2078,7 +2100,9 @@ Initialize the fleet management contract.
 - Resets the fleet counter to `0`
 
 #### `set_identity_contract`
-Configure the identity/reputation contract used for automatic driver profile creation on fleet registration.
+Propose the identity/reputation contract used for automatic driver profile
+creation on fleet registration. The active address remains unchanged until the
+three-day review period elapses and `confirm_identity_contract` is called.
 
 **Parameters:**
 - `admin: Address` - Admin address
@@ -2089,6 +2113,31 @@ Configure the identity/reputation contract used for automatic driver profile cre
 **Errors:**
 - `NotInitialized` - Contract has not been initialized
 - `Unauthorized` - Caller is not the stored admin
+
+**Pending value:** `get_pending_identity_contract`
+
+#### `confirm_identity_contract`
+Apply the pending identity contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
+
+**Errors:** `NoPendingContractChange`, `ContractChangeTimelockNotElapsed`
+
+#### `set_escrow_contract`
+Propose the escrow contract used for fleet pause checks. It becomes active
+after three days and a separate `confirm_escrow_contract` call. The pending
+address is available through `get_pending_escrow_contract`.
+
+#### `confirm_escrow_contract`
+Apply the pending escrow contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
+
+**Errors:** `NoPendingContractChange`, `ContractChangeTimelockNotElapsed`
 
 ### Fleet Operations
 
@@ -2165,7 +2214,7 @@ identity_reputation_contract.
   unaffected — those were fixed at escrow creation time.
 
 #### `admin_reassign_fleet_owner`
-Emergency recovery path for a compromised fleet-owner key. Only the protocol admin may call this.
+Propose an emergency reassignment for a compromised fleet-owner key. The reassignment does not take effect until the proposed address separately accepts it.
 
 **Parameters:**
 - `admin: Address` - Contract admin
@@ -2179,9 +2228,23 @@ Emergency recovery path for a compromised fleet-owner key. Only the protocol adm
 - `Unauthorized` - Caller is not the admin
 
 **State Changes:**
+- Stores the pending new owner without changing the fleet profile.
+- Re-proposing replaces the pending target.
+
+**Events:** `fleet_owner_reassignment_proposed`
+
+#### `accept_fleet_owner_reassignment`
+Accept a pending admin-proposed owner reassignment. Only the exact proposed address may accept, and it must authorize the call.
+
+**Parameters:**
+- `new_owner: Address` - Proposed new owner (must sign)
+- `fleet_id: FleetId` - Fleet identifier
+
+**State Changes:**
 - Updates `profile.owner` to `new_owner`
 - Resets `profile.signers` to `[new_owner]` with `signature_threshold = 1`
-- Bypasses the normal fleet-owner timelock flow and the owner's own authorization path
+- Clears any pending treasury update from the prior owner
+- Removes the pending reassignment
 
 **Events:** `fleet_owner_reassigned`
 
@@ -2496,7 +2559,9 @@ Return the configured reputation reward structure.
 **Returns:** `ReputationConfig`
 
 #### `set_delivery_contract`
-Set the address of the delivery contract that may call into reputation updates.
+Propose the delivery contract address allowed to call reputation updates. The
+active address changes only after three days and a separate
+`confirm_delivery_contract` call.
 
 **Parameters:**
 - `admin: Address` - Admin address (must sign)
@@ -2507,7 +2572,15 @@ Set the address of the delivery contract that may call into reputation updates.
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
 
-**Events:** `delivery_contract_updated` - `(admin, delivery_contract)`
+**Events:** `delivery_contract_change_proposed`; confirmation emits
+`delivery_contract_updated` - `(admin, delivery_contract)`
+
+#### `confirm_delivery_contract`
+Apply the pending delivery contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 #### `set_dispute_contract`
 Set the address of the dispute-resolution contract that may authorize reputation changes.
