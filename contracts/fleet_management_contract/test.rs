@@ -1415,6 +1415,35 @@ fn test_configure_signers_rejects_invalid_threshold() {
 }
 
 #[test]
+fn test_configure_signers_rejects_duplicate_addresses() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let signer_b = Address::generate(&env);
+
+    let mut duplicate_signers = soroban_sdk::Vec::new(&env);
+    duplicate_signers.push_back(owner.clone());
+    duplicate_signers.push_back(owner.clone());
+    duplicate_signers.push_back(signer_b);
+
+    let result = client.try_configure_signers(
+        &owner,
+        &fleet_id,
+        &duplicate_signers,
+        &3u32,
+        &soroban_sdk::Vec::new(&env),
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration for duplicate signers"),
+    }
+
+    let (signers, threshold) = client.get_fleet_signers(&fleet_id);
+    assert_eq!(signers.len(), 1);
+    assert_eq!(signers.get(0).unwrap(), owner);
+    assert_eq!(threshold, 1);
+}
+
+#[test]
 fn test_configure_signers_rejects_zero_threshold() {
     let (env, client, _admin) = setup_test();
 

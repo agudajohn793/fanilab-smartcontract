@@ -1315,6 +1315,16 @@ impl FleetManagementContract {
             panic_with_error!(&env, FleetError::InvalidConfiguration);
         }
 
+        let mut unique_signers = soroban_sdk::Vec::new(&env);
+        for i in 0..signers.len() {
+            if let Some(signer) = signers.get(i) {
+                if unique_signers.contains(&signer) {
+                    panic_with_error!(&env, FleetError::InvalidConfiguration);
+                }
+                unique_signers.push_back(signer);
+            }
+        }
+
         if threshold == 0 || threshold > signers.len() {
             panic_with_error!(&env, FleetError::InvalidConfiguration);
         }
