@@ -2590,7 +2590,7 @@ Suspend a registered driver. Sets `DriverProfile.status` to `DriverStatus::Suspe
 The profile record is **never deleted** — all history (reputation score,
 deliveries completed, KYC status) is preserved. This prevents a suspended
 driver from calling `register_driver` again to obtain a clean slate, since
-that function panics when a profile already exists.
+that function is idempotent and returns the existing profile unchanged.
 
 > **Note:** Gating `assign_driver` on driver suspension status is a deliberate
 > follow-up task in `delivery_contract` and is out of scope here.
@@ -2661,16 +2661,20 @@ let suspended: bool = identity_contract.is_driver_suspended(&driver);
 
 #### `register_driver`
 Register a new driver profile with a starting reputation score of 50.
+Idempotent: if a profile already exists for this address, the existing
+profile is returned unchanged (no event, no state mutation), mirroring
+`register_user`. This means a suspended driver cannot reset their score by
+re-registering, and cross-contract callers do not need defensive
+pre-checks to avoid an `AlreadyInitialized` panic.
 
 **Parameters:**
 - `driver: Address` - Driver address (must sign)
 
 **Authorization:** Driver (must sign)
 
-**Errors:**
-- `AlreadyInitialized` - A profile already exists for this address
+**Returns:** `DriverProfile` — the newly created profile, or the existing one
 
-**Events:** `driver_registered`
+**Events:** `driver_registered` (first registration only)
 
 **State Changes:**
 - Creates `DriverProfile` with `reputation_score = 50`, `deliveries_completed = 0`, `kyc_verified = false`
@@ -2681,19 +2685,17 @@ identity_contract.register_driver(&driver);
 ```
 
 #### `register_user`
-Register a new user (sender/recipient) profile.
+Register a new user (sender/recipient) profile. Idempotent: if a profile
+already exists for this address, the existing profile is returned unchanged.
 
 **Parameters:**
 - `user: Address` - User address (must sign)
 
 **Authorization:** User (must sign)
 
-**Returns:** `UserProfile`
+**Returns:** `UserProfile` — the newly created profile, or the existing one
 
-**Errors:**
-- `AlreadyInitialized` - A profile already exists for this address
-
-**Events:** `user_registered`
+**Events:** `user_registered` (first registration only)
 
 #### `get_driver_profile`
 Retrieve a driver's profile.

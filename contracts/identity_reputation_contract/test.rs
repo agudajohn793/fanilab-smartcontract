@@ -137,16 +137,20 @@ fn test_has_driver_profile() {
 }
 
 #[test]
-fn test_register_driver_duplicate() {
+fn test_register_driver_is_idempotent() {
     let (env, _, client, _, _) = setup();
     let driver = Address::generate(&env);
-    client.register_driver(&driver);
+    let first = client.register_driver(&driver);
 
-    let result = client.try_register_driver(&driver);
-    match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
-        _ => panic!("Expected duplicate registration to fail with AlreadyInitialized"),
-    }
+    // A second registration must not panic (mirroring `register_user`) and
+    // must not re-baseline the profile: the original record is returned
+    // unchanged.
+    let second = client.register_driver(&driver);
+
+    assert_eq!(first, second);
+    assert_eq!(second.reputation_score, 50);
+    assert_eq!(second.deliveries_completed, 0);
+    assert_eq!(second.status, shared_types::DriverStatus::Active);
 }
 
 #[test]
@@ -1032,20 +1036,24 @@ fn test_suspension_preserves_driver_history() {
     assert_eq!(after.status, shared_types::DriverStatus::Suspended);
 }
 
-/// A suspended driver cannot re-register to reset their profile — the profile
-/// still exists so `register_driver` panics with `AlreadyInitialized`.
+/// A suspended driver cannot re-register to reset their profile —
+/// `register_driver` is idempotent and returns the existing (suspended)
+/// profile unchanged, so the score-reset attack stays blocked even though
+/// re-registration no longer panics.
 #[test]
-fn test_suspended_driver_cannot_re_register() {
+fn test_suspended_driver_cannot_reset_via_reregistration() {
     let (env, admin, client, _, _) = setup();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
     client.suspend_driver(&admin, &driver);
 
-    let result = client.try_register_driver(&driver);
-    match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
-        _ => panic!("Expected AlreadyInitialized — suspended profile must block re-registration"),
-    }
+    let profile = client.register_driver(&driver);
+
+    // Profile unchanged: still suspended, score not reset, no new baseline.
+    assert_eq!(profile.status, shared_types::DriverStatus::Suspended);
+    assert_eq!(profile.reputation_score, 50);
+    assert_eq!(profile.deliveries_completed, 0);
+    assert!(client.is_driver_suspended(&driver));
 }
 
 /// Suspending an already-suspended driver returns `InvalidState`.

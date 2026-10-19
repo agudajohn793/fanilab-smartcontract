@@ -781,7 +781,8 @@ pub struct EscrowRecord {
 /// `Suspended` is set by an admin via `suspend_driver` and can be reversed
 /// with `reinstate_driver`.  The profile record is **never deleted** — this
 /// preserves audit history and prevents a suspended driver from re-registering
-/// to reset their score (register_driver panics if a profile already exists).
+/// to reset their score (`register_driver` is idempotent and returns the
+/// existing profile unchanged).
 #[contracttype]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub enum DriverStatus {

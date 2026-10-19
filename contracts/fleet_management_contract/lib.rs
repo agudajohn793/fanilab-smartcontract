@@ -1,8 +1,8 @@
 #![no_std]
 
 use shared_types::{
-    events, is_admin, ttl, DriverInvitedEvent, DriverRemovedEvent, FleetDeactivatedEvent,
-    FleetOwnerReassignedEvent, FleetReactivatedEvent, FleetRegisteredEvent,
+    events, is_admin, ttl, DriverInvitedEvent, DriverProfile, DriverRemovedEvent,
+    FleetDeactivatedEvent, FleetOwnerReassignedEvent, FleetReactivatedEvent, FleetRegisteredEvent,
     FleetTreasuryChangeProposedEvent, FleetTreasuryForceUpdatedEvent, FleetTreasuryUpdatedEvent,
     InviteAcceptedEvent, PayoutRoutingFallbackEvent, StorageKey,
 };
@@ -337,23 +337,22 @@ impl FleetManagementContract {
 
         // Issue #73 — if identity contract is configured, register the fleet
         // owner as a driver in the identity_reputation_contract.
+        //
+        // `register_driver` is idempotent (it mirrors `register_user`): an
+        // owner who is already a registered driver simply has their existing
+        // profile returned unchanged, so the defensive `has_driver_profile`
+        // pre-check that used to guard against an `AlreadyInitialized` panic
+        // is no longer needed.
         if let Some(identity_addr) = env
             .storage()
             .instance()
             .get::<DataKey, Address>(&DataKey::IdentityContract)
         {
-            let has_profile: bool = env.invoke_contract(
+            let _: DriverProfile = env.invoke_contract(
                 &identity_addr,
-                &Symbol::new(&env, "has_driver_profile"),
+                &Symbol::new(&env, "register_driver"),
                 soroban_sdk::vec![&env, owner.clone().into_val(&env)],
             );
-            if !has_profile {
-                let _: () = env.invoke_contract(
-                    &identity_addr,
-                    &Symbol::new(&env, "register_driver"),
-                    soroban_sdk::vec![&env, owner.clone().into_val(&env)],
-                );
-            }
         }
 
         // Emit event: topic = "fleet_registered", data = (fleet_id, owner, treasury).

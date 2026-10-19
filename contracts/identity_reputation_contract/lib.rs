@@ -252,12 +252,25 @@ impl IdentityReputationContract {
             .is_some()
     }
 
+    /// Register a new driver profile, or return the existing one.
+    ///
+    /// Idempotent by design, mirroring `register_user`: when a profile already
+    /// exists for `driver` it is returned unchanged (no event, no state
+    /// mutation). This preserves the suspension invariant — a suspended driver
+    /// cannot reset their score by re-registering, because re-registration is a
+    /// no-op — while removing the `AlreadyInitialized` panic that forced
+    /// cross-contract callers (e.g. `fleet_management_contract::register_fleet`)
+    /// to defend with their own `has_driver_profile` pre-checks.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
-    pub fn register_driver(env: Env, driver: Address) {
+    pub fn register_driver(env: Env, driver: Address) -> DriverProfile {
         driver.require_auth();
         let key = DataKey::DriverProfile(driver.clone());
-        if env.storage().persistent().has(&key) {
-            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<_, DriverProfile>(&key)
+        {
+            return existing;
         }
 
         let profile = DriverProfile {
@@ -284,6 +297,8 @@ impl IdentityReputationContract {
                 starting_score: profile.reputation_score,
             },
         );
+
+        profile
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -530,8 +545,8 @@ impl IdentityReputationContract {
     /// Sets `DriverProfile.status` to `DriverStatus::Suspended`.  The profile
     /// record is preserved — history (reputation, deliveries, KYC) is never
     /// erased.  This prevents a suspended driver from calling `register_driver`
-    /// again to reset their score, since that function panics when a profile
-    /// already exists.
+    /// again to reset their score, since that function is idempotent and
+    /// returns the existing profile unchanged.
     ///
     /// Gating `assign_driver` on suspension status is a follow-up task in
     /// `delivery_contract`.
