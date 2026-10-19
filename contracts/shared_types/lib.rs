@@ -538,7 +538,7 @@ pub struct DriverRegisteredEvent {
 pub struct DriverSuspendedEvent {
     /// Driver address whose profile was suspended.
     pub driver: Address,
-    /// Admin address that performed the suspension.
+    /// Address that performed the suspension (admin or authorized contract).
     pub admin: Address,
 }
 
