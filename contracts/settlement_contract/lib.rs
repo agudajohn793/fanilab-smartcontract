@@ -30,6 +30,7 @@ pub enum SettlementError {
     SwapOutputBelowMinimum = 4,
     InsufficientSwapBalance = 5,
     SwapInputNotConsumed = 6,
+    InvalidSwapDeadline = 7,
 }
 
 #[contract]
@@ -194,6 +195,7 @@ impl SettlementContract {
         recipient: Address,
         amount: i128,
         min_amount_out: i128,
+        deadline: u64,
     ) {
         caller.require_auth();
 
@@ -209,6 +211,13 @@ impl SettlementContract {
 
         if caller != escrow_contract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let now = env.ledger().timestamp();
+        if deadline < now
+            || deadline > now.saturating_add(shared_types::SETTLEMENT_SWAP_DEADLINE_WINDOW_SECONDS)
+        {
+            panic_with_error!(&env, SettlementError::InvalidSwapDeadline);
         }
 
         if amount <= 0 || min_amount_out < 0 || from_token == to_token {
@@ -233,12 +242,7 @@ impl SettlementContract {
             .checked_add(1)
             .unwrap_or_else(|| panic_with_error!(&env, SettlementError::InvalidSwapParameters));
 
-        input_token.approve(
-            &current_contract,
-            &router,
-            &amount,
-            &expiration_ledger,
-        );
+        input_token.approve(&current_contract, &router, &amount, &expiration_ledger);
 
         let amount_out: i128 = env.invoke_contract(
             &router,
@@ -251,6 +255,7 @@ impl SettlementContract {
                 recipient.into_val(&env),
                 amount.into_val(&env),
                 min_amount_out.into_val(&env),
+                deadline.into_val(&env),
             ],
         );
         if amount_out < min_amount_out {

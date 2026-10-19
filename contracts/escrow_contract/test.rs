@@ -108,6 +108,7 @@ impl MaliciousSettlementContract {
         _recipient: Address,
         _amount: i128,
         _min_amount_out: i128,
+        _deadline: u64,
     ) {
         let target: Address = env
             .storage()
@@ -169,6 +170,7 @@ impl MaliciousPreferenceContract {
         _recipient: Address,
         _amount: i128,
         _min_amount_out: i128,
+        _deadline: u64,
     ) {
         let target: Address = env
             .storage()

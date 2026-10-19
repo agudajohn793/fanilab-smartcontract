@@ -97,6 +97,7 @@ tables when debugging an error from this contract.
 | 4 | `SwapOutputBelowMinimum` | Router output is below the requested minimum. |
 | 5 | `InsufficientSwapBalance` | Settlement does not hold the requested input amount. |
 | 6 | `SwapInputNotConsumed` | Router did not consume the exact approved input amount. |
+| 7 | `InvalidSwapDeadline` | Swap deadline is expired or exceeds the 300-second window. |
 
 ## Contracts with no local error enum
 

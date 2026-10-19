@@ -2872,7 +2872,9 @@ The configured router must implement `swap_exact_tokens_for_tokens` with
 `(caller, from_token, to_token, recipient, amount, min_amount_out)` arguments
 and return the actual `amount_out`. It must consume the approved source amount
 and deliver output directly to `recipient`. The escrow funds the settlement
-contract immediately before invoking the swap.
+contract immediately before invoking the swap. Swaps must execute before the
+provided deadline, which is capped at 300 seconds after the current ledger
+timestamp.
 
 ### Initialization
 
@@ -2924,6 +2926,8 @@ Intended to integrate with the Stellar DEX or a liquidity pool to convert
 - `recipient: Address` - Address receiving the swapped funds
 - `amount: i128` - Amount of `from_token` to swap
 - `min_amount_out: i128` - Minimum acceptable output (slippage guard)
+- `deadline: u64` - Unix timestamp after which the swap must be rejected; must
+  be no more than 300 seconds after the current ledger timestamp
 
 **Authorization:** Caller (must sign)
 
@@ -2933,6 +2937,7 @@ Intended to integrate with the Stellar DEX or a liquidity pool to convert
 - `InsufficientSwapBalance` - Settlement does not hold the requested input.
 - `SwapOutputBelowMinimum` - Router output is below `min_amount_out`.
 - `SwapInputNotConsumed` - Router did not consume the exact approved input.
+- `InvalidSwapDeadline` - Deadline is expired or exceeds the 300-second window.
 
 **Returns:** `()`
 
