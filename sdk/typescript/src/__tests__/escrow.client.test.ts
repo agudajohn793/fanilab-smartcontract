@@ -167,7 +167,7 @@ describe('EscrowClient releaseExpiredHoldback binding (issue #452)', () => {
   it('propagates a reverted holdback release to the caller', async () => {
     const call = jest
       .spyOn(ContractInvoker.prototype, 'call')
-      .mockRejectedValue(new Error('Soroban simulation failed: EscrowError::TimelockNotElapsed'));
+      .mockRejectedValue(new Error('Soroban simulation failed: FaniLabError::TimelockNotElapsed'));
 
     await expect(client().releaseExpiredHoldback({ deliveryId: 7n })).rejects.toThrow(
       'TimelockNotElapsed',
@@ -262,7 +262,7 @@ describe('EscrowClient settlement contract timelock lifecycle (Issue #485)', () 
     jest
       .spyOn(ContractInvoker.prototype, 'call')
       .mockRejectedValue(
-        new Error('Soroban simulation failed: EscrowError::TimelockNotElapsed'),
+        new Error('Soroban simulation failed: FaniLabError::TimelockNotElapsed'),
       );
 
     await expect(client().confirmSettlementContract({ admin: ADMIN })).rejects.toThrow(

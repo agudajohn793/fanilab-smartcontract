@@ -27,6 +27,8 @@ pub enum FaniLabError {
     /// Requested operation would exceed a fixed capacity/growth limit
     /// (e.g. a bounded collection is already at its maximum length).
     LimitExceeded = 12,
+    /// A requested timelocked operation was attempted before its delay elapsed.
+    TimelockNotElapsed = 13,
 }
 
 // Event topic constants for on-chain event tracking
@@ -830,6 +832,15 @@ pub struct CargoDescriptor {
     pub fragile: bool,
 }
 
+impl CargoDescriptor {
+    pub const MIN_WEIGHT_GRAMS: u32 = 1;
+    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
+
+    pub fn has_valid_weight(&self) -> bool {
+        (Self::MIN_WEIGHT_GRAMS..=Self::MAX_WEIGHT_GRAMS).contains(&self.weight_grams)
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryMetadata {
@@ -995,6 +1006,11 @@ mod test {
     }
 
     #[test]
+    fn timelock_not_elapsed_has_expected_discriminant() {
+        assert_eq!(FaniLabError::TimelockNotElapsed as u32, 13);
+    }
+
+    #[test]
     fn delivery_created_event_preserves_fields() {
         let env = Env::default();
         let sender = Address::generate(&env);
@@ -1111,6 +1127,20 @@ mod test {
         assert_eq!(desc.weight_grams, 500);
         assert!(desc.fragile);
         assert_eq!(desc.category, CargoCategory::Electronics);
+    }
+
+    #[test]
+    fn cargo_descriptor_validates_weight_boundaries() {
+        let descriptor = |weight_grams| CargoDescriptor {
+            weight_grams,
+            category: CargoCategory::General,
+            fragile: false,
+        };
+
+        assert!(descriptor(CargoDescriptor::MIN_WEIGHT_GRAMS).has_valid_weight());
+        assert!(descriptor(CargoDescriptor::MAX_WEIGHT_GRAMS).has_valid_weight());
+        assert!(!descriptor(0).has_valid_weight());
+        assert!(!descriptor(CargoDescriptor::MAX_WEIGHT_GRAMS + 1).has_valid_weight());
     }
 
     #[test]

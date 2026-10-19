@@ -151,6 +151,7 @@ export const ErrorCodes = {
   ProviderNotFound: 9,
   ProtocolPaused: 11,
   LimitExceeded: 12,
+  TimelockNotElapsed: 13,
 } as const;
 
 export interface ContractInvokeOptions {
