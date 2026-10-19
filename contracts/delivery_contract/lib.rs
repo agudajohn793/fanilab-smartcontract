@@ -128,7 +128,6 @@ pub enum DeliveryError {
 
 mod constants {
     pub const MAX_LOCATION_LEN: u32 = 256;
-    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
 }
 
 /// Validate whether a status transition is permitted by the delivery state machine.
@@ -177,9 +176,7 @@ fn validate_delivery_metadata(
     if metadata.destination.is_empty() || metadata.destination.len() > constants::MAX_LOCATION_LEN {
         return Err(DeliveryError::InvalidMetadata);
     }
-    if metadata.cargo_description.weight_grams == 0
-        || metadata.cargo_description.weight_grams > constants::MAX_WEIGHT_GRAMS
-    {
+    if !metadata.cargo_description.has_valid_weight() {
         return Err(DeliveryError::InvalidMetadata);
     }
     Ok(())

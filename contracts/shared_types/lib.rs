@@ -830,6 +830,15 @@ pub struct CargoDescriptor {
     pub fragile: bool,
 }
 
+impl CargoDescriptor {
+    pub const MIN_WEIGHT_GRAMS: u32 = 1;
+    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
+
+    pub fn has_valid_weight(&self) -> bool {
+        (Self::MIN_WEIGHT_GRAMS..=Self::MAX_WEIGHT_GRAMS).contains(&self.weight_grams)
+    }
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryMetadata {
@@ -1111,6 +1120,20 @@ mod test {
         assert_eq!(desc.weight_grams, 500);
         assert!(desc.fragile);
         assert_eq!(desc.category, CargoCategory::Electronics);
+    }
+
+    #[test]
+    fn cargo_descriptor_validates_weight_boundaries() {
+        let descriptor = |weight_grams| CargoDescriptor {
+            weight_grams,
+            category: CargoCategory::General,
+            fragile: false,
+        };
+
+        assert!(descriptor(CargoDescriptor::MIN_WEIGHT_GRAMS).has_valid_weight());
+        assert!(descriptor(CargoDescriptor::MAX_WEIGHT_GRAMS).has_valid_weight());
+        assert!(!descriptor(0).has_valid_weight());
+        assert!(!descriptor(CargoDescriptor::MAX_WEIGHT_GRAMS + 1).has_valid_weight());
     }
 
     #[test]
