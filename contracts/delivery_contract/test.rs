@@ -121,7 +121,7 @@ impl MockEscrowContract {
         if delivery_id == 7777 {
             panic!("MockEscrowFailure");
         }
-        let placeholder = Address::generate(&_env);
+        let placeholder = _env.current_contract_address();
         let status = if delivery_id == 8888 {
             shared_types::EscrowStatus::Refunded
         } else if _env
@@ -166,8 +166,8 @@ impl MockEscrowContract {
             delivery_id: 0,
             sender: placeholder.clone(),
             recipient: placeholder.clone(),
-            driver: placeholder,
-            token: Address::generate(&_env),
+            driver: placeholder.clone(),
+            token: placeholder,
             amount: 0,
             status,
             created_at: _env.ledger().timestamp(),
