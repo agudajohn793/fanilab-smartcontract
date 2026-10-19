@@ -141,7 +141,7 @@ fn apply_freeze_funds(env: &Env, actor: &Address, delivery_id: u64) {
         // dispute contract with an unresolvable DisputeCase. Panic so
         // the calling transaction reverts cleanly.
         _ => {
-            panic_with_error!(env, EscrowError::InvalidState);
+            panic_with_error!(env, FaniLabError::InvalidState);
         }
     }
 }
@@ -438,7 +438,7 @@ fn settle_holdback_escrow(env: &Env, delivery_id: u64, mut record: EscrowRecord)
     let contract_balance =
         token::Client::new(env, &record.token).balance(&env.current_contract_address());
     if contract_balance < record.amount {
-        panic_with_error!(env, EscrowError::InsufficientFunds);
+        panic_with_error!(env, FaniLabError::InsufficientFunds);
     }
 
     let base_fee_bps: u32 = env
@@ -504,7 +504,7 @@ fn load_escrow(env: &Env, delivery_id: u64) -> EscrowRecord {
         .storage()
         .persistent()
         .get(&key)
-        .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound));
+        .unwrap_or_else(|| panic_with_error!(env, FaniLabError::DeliveryNotFound));
     env.storage().persistent().extend_ttl(
         &key,
         ttl::LEDGER_TTL_THRESHOLD,
@@ -577,15 +577,10 @@ fn index_page(env: &Env, owner: Address, kind: u32, offset: u32, limit: u32) -> 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum EscrowError {
-    InvalidState = 1,
-    DeliveryNotFound = 2,
-    InsufficientFunds = 3,
-    DuplicateDelivery = 4,
     InvalidFee = 5,
     InvalidToken = 6,
     InvalidAmount = 7,
     NoPendingSettlementChange = 8,
-    TimelockNotElapsed = 9,
     InvalidDriver = 10,
     InvalidParties = 11,
     /// A batch operation (`create_escrows_batch`) exceeded `MAX_BATCH_SIZE`.
@@ -818,7 +813,7 @@ impl EscrowContract {
             .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NoPendingSettlementChange));
 
         if env.ledger().timestamp() < pending.activates_at {
-            panic_with_error!(&env, EscrowError::TimelockNotElapsed);
+            panic_with_error!(&env, FaniLabError::TimelockNotElapsed);
         }
 
         let old_address = get_settlement_contract(&env);
@@ -1049,7 +1044,7 @@ impl EscrowContract {
             panic_with_error!(&env, EscrowError::InvalidAmount);
         }
         if env.storage().persistent().has(&escrow_key(delivery_id)) {
-            panic_with_error!(&env, EscrowError::DuplicateDelivery);
+            panic_with_error!(&env, FaniLabError::DuplicateDelivery);
         }
         let config = load_protocol_config(&env);
         if token != config.token {
@@ -1234,7 +1229,7 @@ impl EscrowContract {
                     panic_with_error!(&env, EscrowError::InvalidAmount);
                 }
                 if env.storage().persistent().has(&escrow_key(delivery_id)) {
-                    panic_with_error!(&env, EscrowError::DuplicateDelivery);
+                    panic_with_error!(&env, FaniLabError::DuplicateDelivery);
                 }
                 // Issue #295: same optional delivery-verification check as
                 // create_escrow — skipped when no delivery contract is configured.
@@ -1404,7 +1399,7 @@ impl EscrowContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         if record.status != EscrowStatus::Locked {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let timestamp = env.ledger().timestamp();
         record.status = EscrowStatus::Holdback;
@@ -1428,13 +1423,13 @@ impl EscrowContract {
         // and denying the driver their reputation.
         require_delivery_lifecycle_caller(&env, &caller, &record);
         if record.status != EscrowStatus::Locked {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
+            panic_with_error!(&env, FaniLabError::InsufficientFunds);
         }
 
         let base_fee_bps: u32 = env
@@ -1573,13 +1568,13 @@ impl EscrowContract {
             && record.status != EscrowStatus::Paused
             && record.status != EscrowStatus::Holdback
         {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         // Balance verification guard: confirm contract holds sufficient funds before transfer
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
+            panic_with_error!(&env, FaniLabError::InsufficientFunds);
         }
 
         // Issue #468: no reputation adjustment is performed here. Refunding a
@@ -1671,7 +1666,7 @@ impl EscrowContract {
         // establishes the precedent that the transition is sound.  Terminal
         // states (Released, Refunded, Split) are still rejected.
         if record.status != EscrowStatus::Locked && record.status != EscrowStatus::Holdback {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let timestamp = env.ledger().timestamp();
         record.status = EscrowStatus::Paused;
@@ -1695,7 +1690,7 @@ impl EscrowContract {
         require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Paused {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
         // Balance verification guard: confirm contract holds sufficient funds
@@ -1709,7 +1704,7 @@ impl EscrowContract {
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
+            panic_with_error!(&env, FaniLabError::InsufficientFunds);
         }
 
         // Checks + effects (state) are resolved per-branch first; the actual
@@ -1822,12 +1817,12 @@ impl EscrowContract {
         }
         let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Paused {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
         if contract_balance < record.amount {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
+            panic_with_error!(&env, FaniLabError::InsufficientFunds);
         }
 
         let sender_amount = record.amount.saturating_mul(sender_share_bps as i128) / 10000;
@@ -1926,7 +1921,7 @@ impl EscrowContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         if record.status != EscrowStatus::Holdback {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let driver = record.driver.clone();
         let (driver_amount, platform_fee) = settle_holdback_escrow(&env, delivery_id, record);
@@ -1955,17 +1950,17 @@ impl EscrowContract {
         require_not_paused(&env);
         let record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Holdback {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         // `mark_holdback_escrow` is the only path into `Holdback` and always
         // sets this, but fall back to a typed rejection rather than a panic
         // on unwrap if that invariant is ever violated.
         let holdback_started_at = record
             .holdback_started_at
-            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::InvalidState));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::InvalidState));
         let deadline = holdback_started_at.saturating_add(get_holdback_window(&env));
         if env.ledger().timestamp() < deadline {
-            panic_with_error!(&env, EscrowError::TimelockNotElapsed);
+            panic_with_error!(&env, FaniLabError::TimelockNotElapsed);
         }
         let driver = record.driver.clone();
         let (driver_amount, platform_fee) = settle_holdback_escrow(&env, delivery_id, record);
@@ -1981,7 +1976,7 @@ impl EscrowContract {
         admin.require_auth();
         require_admin(&env, &admin);
         if new_window_seconds < constants::MIN_HOLDBACK_WINDOW_SECONDS {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         env.storage()
             .instance()
@@ -2013,7 +2008,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic_with_error!(env, EscrowError::DeliveryNotFound))
+            .unwrap_or_else(|| panic_with_error!(env, FaniLabError::DeliveryNotFound))
     }
 
     /// Dispute-contract entry point for freezing an escrow's funds.
@@ -2061,15 +2056,15 @@ impl EscrowContract {
         require_not_paused(&env);
         let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Locked {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         if let Some(expires_at) = record.expires_at {
             let current_timestamp = env.ledger().timestamp();
             if current_timestamp <= expires_at {
-                panic_with_error!(&env, EscrowError::InvalidState);
+                panic_with_error!(&env, FaniLabError::InvalidState);
             }
         } else {
-            panic_with_error!(&env, EscrowError::InvalidState);
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
         let contract_balance =
             token::Client::new(&env, &record.token).balance(&env.current_contract_address());
@@ -2082,7 +2077,7 @@ impl EscrowContract {
             .unwrap_or(0);
 
         if contract_balance < record.amount || current_total > contract_balance {
-            panic_with_error!(&env, EscrowError::InsufficientFunds);
+            panic_with_error!(&env, FaniLabError::InsufficientFunds);
         }
         // Effects (state) are committed before the interaction (transfer)
         // below, per checks-effects-interactions.

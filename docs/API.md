@@ -3040,6 +3040,9 @@ pub struct CargoDescriptor {
 }
 ```
 
+`CargoDescriptor::has_valid_weight()` accepts inclusive weights from 1 gram through
+1,000,000 grams (1,000 kg); delivery metadata validation uses the same method.
+
 #### `DriverProfile`
 ```rust
 pub struct DriverProfile {
@@ -3067,6 +3070,7 @@ pub enum FaniLabError {
     ProviderNotFound = 9,       // Driver not found
     ProtocolPaused = 11,        // Protocol paused, fund movements halted
     LimitExceeded = 12,         // A bounded collection is already at its max length
+    TimelockNotElapsed = 13,    // A timelocked operation was attempted too early
 }
 ```
 

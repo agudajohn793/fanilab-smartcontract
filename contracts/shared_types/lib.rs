@@ -27,6 +27,8 @@ pub enum FaniLabError {
     /// Requested operation would exceed a fixed capacity/growth limit
     /// (e.g. a bounded collection is already at its maximum length).
     LimitExceeded = 12,
+    /// A requested timelocked operation was attempted before its delay elapsed.
+    TimelockNotElapsed = 13,
 }
 
 // Event topic constants for on-chain event tracking
@@ -1001,6 +1003,11 @@ mod test {
     #[test]
     fn provider_not_found_has_expected_discriminant() {
         assert_eq!(FaniLabError::ProviderNotFound as u32, 9);
+    }
+
+    #[test]
+    fn timelock_not_elapsed_has_expected_discriminant() {
+        assert_eq!(FaniLabError::TimelockNotElapsed as u32, 13);
     }
 
     #[test]

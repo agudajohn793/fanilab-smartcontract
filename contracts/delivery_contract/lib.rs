@@ -110,7 +110,6 @@ fn index_page(env: &Env, owner: Address, kind: u32, offset: u32, limit: u32) -> 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum DeliveryError {
-    InvalidState = 1,
     InvalidMetadata = 2,
     /// A batch operation (e.g. create_deliveries_batch) exceeded MAX_BATCH_SIZE.
     BatchTooLarge = 3,

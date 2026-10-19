@@ -80,7 +80,7 @@ fn test_init_sets_admin_and_counter() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1)")]
+#[should_panic(expected = "Error(Contract, #2)")]
 fn test_init_twice_panics() {
     let (_env, client, admin) = setup_test();
     client.init(&admin);
@@ -176,8 +176,8 @@ fn test_admin_reassign_fleet_owner_requires_admin() {
 
     let result = client.try_admin_reassign_fleet_owner(&attacker, &fleet_id, &new_owner);
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 
     assert_eq!(client.get_fleet(&fleet_id).owner, owner);
@@ -256,8 +256,8 @@ fn test_admin_force_update_treasury_requires_admin() {
 
     let result = client.try_admin_force_update_treasury(&attacker, &fleet_id, &new_treasury);
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 
     assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
@@ -308,7 +308,7 @@ fn test_update_fleet_treasury_emits_proposed_event_immediately() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_update_fleet_treasury_rejects_non_owner() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
@@ -319,7 +319,7 @@ fn test_update_fleet_treasury_rejects_non_owner() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #13)")]
 fn test_confirm_fleet_treasury_update_before_timelock_panics() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -497,7 +497,7 @@ fn test_cancel_invite_allows_immediate_reinvite() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_cancel_invite_non_signer_is_rejected() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -535,7 +535,7 @@ fn test_cancel_invite_on_active_driver_panics() {
 // Issue #74 — Fleet Owner Authorization ─────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_add_driver_non_owner_is_rejected() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
@@ -725,7 +725,7 @@ fn test_remove_driver_not_in_fleet_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_remove_driver_unauthorized_caller_panics() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -973,7 +973,7 @@ fn test_set_identity_contract_admin_success() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_set_identity_contract_unauthorized_caller_panics() {
     let (env, client, _admin) = setup_test();
 
@@ -1281,7 +1281,7 @@ fn test_configure_signers_requires_threshold() {
     // Fails without co-signers
     let result = client.try_configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected threshold error"),
     }
 
@@ -1310,8 +1310,8 @@ fn test_configure_signers_unauthorized_not_owner() {
 
     let result = client.try_configure_signers(&attacker, &fleet_id, &new_signers, &2u32, &soroban_sdk::Vec::new(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1350,8 +1350,8 @@ fn test_update_fleet_treasury_unauthorized_not_signer() {
     let result =
         client.try_update_fleet_treasury(&attacker, &fleet_id, &new_treasury, &no_co_signers(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1462,8 +1462,8 @@ fn test_add_driver_unauthorized_not_signer() {
     let result =
         client.try_add_driver_to_fleet(&attacker, &fleet_id, &driver, &no_co_signers(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1694,7 +1694,7 @@ fn test_admin_can_deactivate_fleet() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_deactivate_fleet_rejects_unauthorized_caller() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);

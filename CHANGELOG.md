@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- Shared `Unauthorized`, `AlreadyInitialized`, `NotInitialized`, `InvalidState`, `DeliveryNotFound`, `InsufficientFunds`, `DuplicateDelivery`, and `TimelockNotElapsed` failures now consistently use `FaniLabError` across contracts instead of contract-specific duplicate variants. `TimelockNotElapsed` is assigned shared code 13; integrations should resolve these shared errors against the `FaniLabError` mapping.
+
 ### Security
 - **BREAKING (authorization):** `delivery_contract::raise_dispute` is now callable only by the configured `dispute_resolution_contract`; the sender / recipient / driver checks are removed (Issue #444). Previously any involved party could pause the escrow directly, which skipped the dispute state machine entirely: no `DisputeCase` was recorded, and because every admin resolution entry point requires one, the escrow funds were permanently locked and unrecoverable. Authentication of the human party is now solely the dispute contract's responsibility.
 - **BREAKING (authorization):** `escrow_contract::raise_dispute` is now callable only by the configured `dispute_resolution_contract`, matching the gate `freeze_funds` already enforced (Issue #445). The same direct-invocation flaw let any party move an escrow to `Paused` with no resolvable dispute case, orphaning the locked funds.
