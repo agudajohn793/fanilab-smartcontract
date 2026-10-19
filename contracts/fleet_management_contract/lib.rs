@@ -36,6 +36,7 @@ pub const MAX_SIGNERS_PER_FLEET: u32 = 20;
 /// eligible for confirmation, giving active drivers advance notice before
 /// their future payouts are redirected (Issue #70).
 pub const TREASURY_CHANGE_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60; // 3 days
+pub const PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60; // 3 days
 
 fn require_escrow_not_paused(env: &Env) {
     let Some(escrow_contract) = env
@@ -156,6 +157,8 @@ pub enum FleetError {
     DriverNotRegistered = 13,
     /// The fleet already holds `MAX_ROSTER_SIZE` active drivers.
     RosterFull = 14,
+    NoPendingContractChange = 15,
+    ContractChangeTimelockNotElapsed = 16,
 }
 
 #[contracttype]
@@ -213,6 +216,18 @@ pub enum DataKey {
     FleetRoster(u64, u32),
     /// Persistent key — pending, not-yet-confirmed treasury change for a fleet.
     PendingTreasury(u64),
+    /// Instance key — pending identity contract address awaiting confirmation.
+    PendingIdentityContract,
+    /// Instance key — pending escrow contract address awaiting confirmation.
+    PendingEscrowContract,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingContractAddress {
+    pub address: Address,
+    pub proposed_by: Address,
+    pub activates_at: u64,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -236,25 +251,63 @@ impl FleetManagementContract {
             .set(&DataKey::FleetCounter, &0u64);
     }
 
-    /// Configure the address of the identity_reputation_contract.  Admin only.
-    /// Once set, `register_fleet` will automatically create an identity profile
-    /// for the fleet owner via a cross-contract call.
+    /// Propose an identity_reputation_contract address. The address takes
+    /// effect only after the three-day review period and a separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FleetError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingIdentityContract,
+            &PendingContractAddress {
+                address: identity_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
-            .set(&DataKey::IdentityContract, &identity_contract);
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "identity_contract_change_proposed"),),
+            (admin, identity_contract, activates_at),
+        );
+    }
+
+    pub fn confirm_identity_contract(env: Env) {
+        let pending: PendingContractAddress = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingIdentityContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FleetError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::IdentityContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingIdentityContract);
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "identity_contract_updated"),),
-            (admin, identity_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_identity_contract(env: Env) -> Option<PendingContractAddress> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingIdentityContract)
     }
 
     /// Return the configured identity_reputation_contract address, if any.
@@ -264,22 +317,63 @@ impl FleetManagementContract {
             .get(&DataKey::IdentityContract)
     }
 
+    /// Propose an escrow contract address. The address takes effect only
+    /// after the three-day review period and a separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FleetError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingContractAddress {
+                address: escrow_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
-            .set(&DataKey::EscrowContract, &escrow_contract);
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, escrow_contract, activates_at),
+        );
+    }
+
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingContractAddress = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FleetError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_updated"),),
-            (admin, escrow_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingContractAddress> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     /// Return the configured escrow_contract address, if any.

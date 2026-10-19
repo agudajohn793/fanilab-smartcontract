@@ -38,6 +38,12 @@ fn no_co_signers(env: &Env) -> soroban_sdk::Vec<Address> {
     soroban_sdk::Vec::new(env)
 }
 
+fn advance_peer_contract_change_timelock(env: &Env) {
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+}
+
 fn setup_test() -> (Env, FleetManagementContractClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -962,6 +968,16 @@ fn test_set_identity_contract_admin_success() {
 
     let identity_id = env.register(IdentityReputationContract, ());
     client.set_identity_contract(&admin, &identity_id);
+    assert_eq!(client.get_identity_contract(), None);
+    assert_eq!(
+        client.get_pending_identity_contract().unwrap().address,
+        identity_id
+    );
+
+    let too_early = client.try_confirm_identity_contract();
+    assert!(too_early.is_err());
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let stored: Address = env.as_contract(&client.address, || {
         env.storage()
@@ -993,6 +1009,8 @@ fn test_register_fleet_twice_same_owner_with_identity_contract() {
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
     client.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     let treasury_a = Address::generate(&env);
@@ -1018,6 +1036,8 @@ fn test_register_fleet_for_existing_driver_succeeds() {
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
     client.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     identity_client.register_driver(&owner);
@@ -1598,6 +1618,8 @@ fn test_full_protocol_happy_path() {
     let fleet = FleetManagementContractClient::new(&env, &fleet_id);
     fleet.init(&admin);
     fleet.set_escrow_contract(&admin, &escrow_id);
+    advance_peer_contract_change_timelock(&env);
+    fleet.confirm_escrow_contract();
 
     let delivery_id = env.register(DeliveryContract, ());
     let delivery = delivery_contract::DeliveryContractClient::new(&env, &delivery_id);
@@ -1610,6 +1632,8 @@ fn test_full_protocol_happy_path() {
     identity.init(&admin, &delivery_id, &dispute_id);
     delivery.set_identity_reputation_contract(&admin, &identity_id);
     fleet.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    fleet.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     let treasury = Address::generate(&env);
@@ -1907,6 +1931,8 @@ fn setup_with_identity(
 ) -> identity_reputation_contract::IdentityReputationContractClient<'static> {
     let identity_id = env.register(IdentityReputationContract, ());
     client.set_identity_contract(admin, &identity_id);
+    advance_peer_contract_change_timelock(env);
+    client.confirm_identity_contract();
     identity_reputation_contract::IdentityReputationContractClient::new(env, &identity_id)
 }
 
