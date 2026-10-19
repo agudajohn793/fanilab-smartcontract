@@ -53,6 +53,18 @@ describe('DisputeResolutionClient evidence hash decoding', () => {
     expect(Buffer.from(args[2].value).toString('hex')).toBe(EVIDENCE_HASH_HEX);
   });
 
+  test('acceptAdmin invokes the nominee-confirmed bootstrap endpoint', async () => {
+    callMock.mockResolvedValue(undefined);
+
+    await client.acceptAdmin({ newAdmin: submitter });
+
+    expect(callMock).toHaveBeenCalledWith(
+      'accept_admin',
+      [{ kind: 'address', value: submitter }],
+      undefined
+    );
+  });
+
   test('getDispute round-trips an added evidence hash back as hex', async () => {
     callMock.mockResolvedValueOnce(undefined);
     callMock.mockResolvedValueOnce({

@@ -1605,31 +1605,47 @@ Initialize the dispute resolution contract.
 ### Admin Operations
 
 #### `add_admin`
-Grant admin privileges to a new address.
+Propose or confirm adding a mediator. The first current admin call creates a
+pending proposal; a different current admin must call `add_admin` with the
+same nominee to approve it. During initial bootstrap, the nominated admin
+instead calls `accept_admin` to confirm the first addition.
 
 **Parameters:**
 - `caller: Address` - Current admin
 - `new_admin: Address` - Address to promote
 
-**Authorization:** Existing admin
+**Authorization:** Existing admin; approval must come from two distinct current admins except for the nominee-confirmed bootstrap
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
 - `LimitExceeded` - The admin roster already holds `MAX_ADMINS` (50) entries
+- `InvalidState` - The same admin attempts to approve their own proposal, or the nominee is already an admin
 
 **Example:**
 ```rust
-dispute_contract.add_admin(&current_admin, &new_admin);
+dispute_contract.add_admin(&first_admin, &new_admin); // proposal
+dispute_contract.add_admin(&second_admin, &new_admin); // confirmation
+```
+
+#### `accept_admin`
+Confirm a first additional mediator during initial bootstrap. The nominee must
+authorize the call, and this path is available only while the original admin
+is the sole current admin.
+
+```rust
+dispute_contract.add_admin(&initial_admin, &new_admin);
+dispute_contract.accept_admin(&new_admin);
 ```
 
 #### `remove_admin`
-Revoke admin privileges from an address.
+Propose or confirm removing a mediator. A different current admin must confirm
+the same removal using a second `remove_admin` call.
 
 **Parameters:**
 - `caller: Address` - Current admin performing the removal
 - `old_admin: Address` - Address to demote
 
-**Authorization:** Existing admin
+**Authorization:** Two distinct current admins
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin

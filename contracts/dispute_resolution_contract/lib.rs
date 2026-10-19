@@ -132,6 +132,8 @@ pub struct DisputeCase {
 pub enum DataKey {
     Admin(Address),
     AdminList,
+    PendingAdminAdd(Address),
+    PendingAdminRemove(Address),
     DeliveryContract,
     EscrowContract,
     IdentityReputationContract,
@@ -271,21 +273,80 @@ impl DisputeResolutionContract {
             panic_with_error!(&env, FaniLabError::LimitExceeded);
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Admin(new_admin.clone()), &true);
+        if Self::is_admin(env.clone(), new_admin.clone()) {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
 
-        if !admin_list.iter().any(|a| a == new_admin) {
+        let key = DataKey::PendingAdminAdd(new_admin.clone());
+        if let Some(proposer) = env.storage().instance().get::<_, Address>(&key) {
+            if proposer == caller {
+                panic_with_error!(&env, FaniLabError::InvalidState);
+            }
+            if !Self::is_admin(env.clone(), proposer) {
+                env.storage().instance().set(&key, &caller);
+                env.events().publish(
+                    (Symbol::new(&env, "admin_add_proposed"),),
+                    (caller, new_admin),
+                );
+                return;
+            }
+            env.storage().instance().remove(&key);
             admin_list.push_back(new_admin.clone());
             env.storage()
                 .instance()
+                .set(&DataKey::Admin(new_admin.clone()), &true);
+            env.storage()
+                .instance()
                 .set(&DataKey::AdminList, &admin_list);
+            env.events()
+                .publish((Symbol::new(&env, "admin_added"),), (caller, new_admin));
+        } else {
+            env.storage().instance().set(&key, &caller);
+            env.events().publish(
+                (Symbol::new(&env, "admin_add_proposed"),),
+                (caller, new_admin),
+            );
+        }
+    }
+
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        new_admin.require_auth();
+        let key = DataKey::PendingAdminAdd(new_admin.clone());
+        let proposer = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::InvalidState));
+        let admin_list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AdminList)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        // The initial administrator cannot obtain an existing co-signature.
+        // Require the proposed administrator's own acceptance for this
+        // one-time bootstrap path; all later additions need two current admins.
+        if admin_list.len() != 1
+            || admin_list.get(0) != Some(proposer.clone())
+            || !Self::is_admin(env.clone(), proposer.clone())
+            || Self::is_admin(env.clone(), new_admin.clone())
+            || admin_list.len() >= MAX_ADMINS
+        {
+            panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
-        // Issue #212: emit a roster-change event so the remaining admins and
-        // any off-chain monitoring can detect additions immediately.
+        let mut updated_admin_list = admin_list;
+        updated_admin_list.push_back(new_admin.clone());
+        env.storage().instance().remove(&key);
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin(new_admin.clone()), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::AdminList, &updated_admin_list);
         env.events()
-            .publish((Symbol::new(&env, "admin_added"),), (caller, new_admin));
+            .publish((Symbol::new(&env, "admin_added"),), (proposer, new_admin));
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -301,40 +362,50 @@ impl DisputeResolutionContract {
             .get(&DataKey::AdminList)
             .unwrap_or_else(|| Vec::new(&env));
 
-        let mut new_list = Vec::new(&env);
-        for admin in admin_list.iter() {
-            if admin != old_admin {
-                new_list.push_back(admin);
+        if !Self::is_admin(env.clone(), old_admin.clone()) || admin_list.len() <= 1 {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        let key = DataKey::PendingAdminRemove(old_admin.clone());
+        if let Some(proposer) = env.storage().instance().get::<_, Address>(&key) {
+            if proposer == caller {
+                panic_with_error!(&env, FaniLabError::InvalidState);
             }
+            if !Self::is_admin(env.clone(), proposer) {
+                env.storage().instance().set(&key, &caller);
+                env.events().publish(
+                    (Symbol::new(&env, "admin_remove_proposed"),),
+                    (caller, old_admin),
+                );
+                return;
+            }
+
+            let mut new_list = Vec::new(&env);
+            for admin in admin_list.iter() {
+                if admin != old_admin {
+                    new_list.push_back(admin);
+                }
+            }
+
+            if new_list.is_empty() {
+                panic_with_error!(&env, FaniLabError::InvalidState);
+            }
+
+            env.storage().instance().remove(&key);
+            env.storage()
+                .instance()
+                .remove(&DataKey::Admin(old_admin.clone()));
+            env.storage().instance().set(&DataKey::AdminList, &new_list);
+
+            env.events()
+                .publish((Symbol::new(&env, "admin_removed"),), (caller, old_admin));
+        } else {
+            env.storage().instance().set(&key, &caller);
+            env.events().publish(
+                (Symbol::new(&env, "admin_remove_proposed"),),
+                (caller, old_admin),
+            );
         }
-
-        // Removing the last admin would permanently brick governance — no one
-        // would be left who could call add_admin to recover.
-        if new_list.is_empty() {
-            panic_with_error!(&env, FaniLabError::InvalidState);
-        }
-
-        // Issue #212: a single admin must not be able to consolidate the
-        // roster down to only themselves in one uninterrupted sequence.
-        // Reducing the roster to exactly one admin is therefore permitted
-        // only when the caller is removing themselves (a deliberate
-        // step-down); an admin removing a *different* admin may never leave
-        // itself as the sole remaining admin. Legitimate removals still work
-        // while at least one other admin remains, and a full hand-off is done
-        // by adding the successor first and then stepping down.
-        if new_list.len() == 1 && old_admin != caller {
-            panic_with_error!(&env, FaniLabError::InvalidState);
-        }
-
-        env.storage()
-            .instance()
-            .remove(&DataKey::Admin(old_admin.clone()));
-        env.storage().instance().set(&DataKey::AdminList, &new_list);
-
-        // Issue #212: emit a roster-change event identifying the caller and
-        // the removed address for the remaining admins / off-chain monitors.
-        env.events()
-            .publish((Symbol::new(&env, "admin_removed"),), (caller, old_admin));
     }
 
     pub fn is_admin(env: Env, admin: Address) -> bool {

@@ -13,6 +13,10 @@ export interface AddAdminParams {
   newAdmin: string;
 }
 
+export interface AcceptAdminParams {
+  newAdmin: string;
+}
+
 export interface RemoveAdminParams {
   caller: string;
   oldAdmin: string;

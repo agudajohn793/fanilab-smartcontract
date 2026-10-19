@@ -27,6 +27,10 @@ export class DisputeResolutionClient {
     await this.invoker.call('add_admin', [address(params.caller), address(params.newAdmin)], options);
   }
 
+  async acceptAdmin(params: DisputeResolutionTypes.AcceptAdminParams, options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('accept_admin', [address(params.newAdmin)], options);
+  }
+
   async removeAdmin(params: DisputeResolutionTypes.RemoveAdminParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('remove_admin', [address(params.caller), address(params.oldAdmin)], options);
   }

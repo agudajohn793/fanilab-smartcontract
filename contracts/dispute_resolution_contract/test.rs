@@ -166,6 +166,35 @@ fn setup_test() -> (
     )
 }
 
+fn bootstrap_admin(
+    client: &DisputeResolutionContractClient<'_>,
+    proposer: &Address,
+    nominee: &Address,
+) {
+    client.add_admin(proposer, nominee);
+    client.accept_admin(nominee);
+}
+
+fn approve_admin_add(
+    client: &DisputeResolutionContractClient<'_>,
+    proposer: &Address,
+    confirmer: &Address,
+    nominee: &Address,
+) {
+    client.add_admin(proposer, nominee);
+    client.add_admin(confirmer, nominee);
+}
+
+fn approve_admin_removal(
+    client: &DisputeResolutionContractClient<'_>,
+    proposer: &Address,
+    confirmer: &Address,
+    admin_to_remove: &Address,
+) {
+    client.remove_admin(proposer, admin_to_remove);
+    client.remove_admin(confirmer, admin_to_remove);
+}
+
 fn set_mock_delivery(
     env: &Env,
     delivery_contract_id: &Address,
@@ -288,30 +317,54 @@ fn test_admin_whitelist_management() {
     assert!(!dispute_client.is_admin(&new_admin));
 
     // Admin adds new_admin
-    dispute_client.add_admin(&admin, &new_admin);
+    bootstrap_admin(&dispute_client, &admin, &new_admin);
     assert!(dispute_client.is_admin(&new_admin));
 
     // Original admin steps down, leaving new_admin as the sole admin. A
     // self-removal is the sanctioned way to reduce the roster to one admin
     // (Issue #212); an admin removing a *different* admin may never leave
     // itself alone.
-    dispute_client.remove_admin(&admin, &admin);
+    approve_admin_removal(&dispute_client, &admin, &new_admin, &admin);
     assert!(!dispute_client.is_admin(&admin));
     assert!(dispute_client.is_admin(&new_admin));
 }
 
 #[test]
+fn test_admin_roster_changes_require_distinct_approvals() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let second_admin = Address::generate(&env);
+    bootstrap_admin(&dispute_client, &admin, &second_admin);
+
+    let new_admin = Address::generate(&env);
+    dispute_client.add_admin(&admin, &new_admin);
+    assert!(!dispute_client.is_admin(&new_admin));
+    let duplicate_approval = dispute_client.try_add_admin(&admin, &new_admin);
+    match duplicate_approval {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected duplicate-approver rejection, got {other:?}"),
+    }
+    assert!(!dispute_client.is_admin(&new_admin));
+    dispute_client.add_admin(&second_admin, &new_admin);
+    assert!(dispute_client.is_admin(&new_admin));
+
+    dispute_client.remove_admin(&admin, &new_admin);
+    assert!(dispute_client.is_admin(&new_admin));
+    dispute_client.remove_admin(&second_admin, &new_admin);
+    assert!(!dispute_client.is_admin(&new_admin));
+}
+
+#[test]
 #[should_panic(expected = "HostError: Error(Contract, #5)")] // FaniLabError::InvalidState
 fn test_admin_cannot_consolidate_roster_to_self() {
-    // Issue #212: an admin must not be able to reduce the roster to only
-    // itself by removing the others.
+    // Repeating a removal proposal from the same admin cannot count as a
+    // second signature.
     let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
 
     let admin2 = Address::generate(&env);
-    dispute_client.add_admin(&admin, &admin2);
+    bootstrap_admin(&dispute_client, &admin, &admin2);
 
-    // `admin` removing `admin2` would leave `admin` as the sole admin — the
-    // self-service consolidation this guard blocks.
+    // `admin` cannot both propose and approve removing admin2.
+    dispute_client.remove_admin(&admin, &admin2);
     dispute_client.remove_admin(&admin, &admin2);
 }
 
@@ -323,11 +376,11 @@ fn test_admin_removal_still_works_while_another_admin_remains() {
 
     let admin2 = Address::generate(&env);
     let admin3 = Address::generate(&env);
-    dispute_client.add_admin(&admin, &admin2);
-    dispute_client.add_admin(&admin, &admin3);
+    bootstrap_admin(&dispute_client, &admin, &admin2);
+    approve_admin_add(&dispute_client, &admin, &admin2, &admin3);
 
     // Roster is [admin, admin2, admin3]; removing admin3 leaves two admins.
-    dispute_client.remove_admin(&admin, &admin3);
+    approve_admin_removal(&dispute_client, &admin, &admin2, &admin3);
     assert!(!dispute_client.is_admin(&admin3));
     assert_eq!(dispute_client.list_admins().len(), 2);
 }
@@ -348,10 +401,10 @@ fn test_remove_admin_allowed_when_multiple_admins_remain() {
     let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
 
     let second_admin = Address::generate(&env);
-    dispute_client.add_admin(&admin, &second_admin);
+    bootstrap_admin(&dispute_client, &admin, &second_admin);
 
     // With two admins present, removing one must still succeed.
-    dispute_client.remove_admin(&admin, &admin);
+    approve_admin_removal(&dispute_client, &admin, &second_admin, &admin);
     assert!(!dispute_client.is_admin(&admin));
     assert!(dispute_client.is_admin(&second_admin));
 }
@@ -374,9 +427,11 @@ fn test_add_admin_rejected_at_max_admins() {
     let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
 
     // init seeds one admin; add MAX_ADMINS - 1 more to reach the cap exactly.
-    for _ in 1..MAX_ADMINS {
+    let second_admin = Address::generate(&env);
+    bootstrap_admin(&dispute_client, &admin, &second_admin);
+    for _ in 2..MAX_ADMINS {
         let new_admin = Address::generate(&env);
-        dispute_client.add_admin(&admin, &new_admin);
+        approve_admin_add(&dispute_client, &admin, &second_admin, &new_admin);
     }
     assert_eq!(dispute_client.list_admins().len(), MAX_ADMINS);
 
@@ -1817,7 +1872,7 @@ fn test_list_admins_after_adding_admin() {
         setup_test();
 
     let new_admin = Address::generate(&env);
-    dispute_client.add_admin(&admin, &new_admin);
+    bootstrap_admin(&dispute_client, &admin, &new_admin);
 
     let admins = dispute_client.list_admins();
     assert_eq!(admins.len(), 2);
@@ -1831,10 +1886,10 @@ fn test_list_admins_after_removing_admin() {
         setup_test();
 
     let new_admin = Address::generate(&env);
-    dispute_client.add_admin(&admin, &new_admin);
+    bootstrap_admin(&dispute_client, &admin, &new_admin);
     // `new_admin` steps down; reducing the roster to a single admin is only
     // permitted via self-removal (Issue #212).
-    dispute_client.remove_admin(&new_admin, &new_admin);
+    approve_admin_removal(&dispute_client, &new_admin, &admin, &new_admin);
 
     let admins = dispute_client.list_admins();
     assert_eq!(admins.len(), 1);
@@ -1850,14 +1905,14 @@ fn test_list_admins_after_multiple_additions_and_removals() {
     let admin3 = Address::generate(&env);
     let admin4 = Address::generate(&env);
 
-    dispute_client.add_admin(&admin, &admin2);
-    dispute_client.add_admin(&admin2, &admin3);
-    dispute_client.add_admin(&admin3, &admin4);
+    bootstrap_admin(&dispute_client, &admin, &admin2);
+    approve_admin_add(&dispute_client, &admin, &admin2, &admin3);
+    approve_admin_add(&dispute_client, &admin2, &admin3, &admin4);
 
     let admins = dispute_client.list_admins();
     assert_eq!(admins.len(), 4);
 
-    dispute_client.remove_admin(&admin2, &admin3);
+    approve_admin_removal(&dispute_client, &admin2, &admin4, &admin3);
     let admins = dispute_client.list_admins();
     assert_eq!(admins.len(), 3);
 }
@@ -2194,7 +2249,7 @@ fn test_peer_setters_accept_added_admin() {
     let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
 
     let second_admin = Address::generate(&env);
-    dispute_client.add_admin(&admin, &second_admin);
+    bootstrap_admin(&dispute_client, &admin, &second_admin);
 
     let new_delivery = Address::generate(&env);
     dispute_client.set_delivery_contract(&second_admin, &new_delivery);
