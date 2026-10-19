@@ -2753,6 +2753,7 @@ Increase a driver's reputation score after a successful delivery.
 - `NotInitialized` - Contract addresses not configured
 - `Unauthorized` - Caller is not an authorized contract
 - `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is suspended (reputation is frozen until reinstatement)
 
 **Events:** `reputation_increased`
 
@@ -2760,6 +2761,7 @@ Increase a driver's reputation score after a successful delivery.
 - Adds base 5 points + 3 for heavy cargo (>5 000 g) + 2 for fragile cargo
 - Caps `reputation_score` at 100
 - Increments `deliveries_completed`
+- Rejected with `InvalidState` while the driver is suspended
 
 **Example:**
 ```rust
@@ -2791,6 +2793,8 @@ Decrease a driver's reputation score following a dispute resolved in the sender'
 
 **State Changes:**
 - Decreases `reputation_score` by `points`, flooring at 0 (saturating subtraction)
+- Deliberately **not** gated on driver suspension — penalties must still land
+  while a driver is suspended (only reputation _increases_ freeze on suspension)
 
 **Example:**
 ```rust
@@ -2818,12 +2822,14 @@ the delivery is later confirmed).
 **Errors:**
 - `Unauthorized` - Caller is not an authorized contract
 - `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is suspended (reputation is frozen until reinstatement)
 
 **Events:** `reputation_awarded`
 
 **State Changes:**
 - Increases `reputation_score` by `points`, capped at 100
 - Leaves `deliveries_completed` unchanged
+- Rejected with `InvalidState` while the driver is suspended
 
 **Example:**
 ```rust

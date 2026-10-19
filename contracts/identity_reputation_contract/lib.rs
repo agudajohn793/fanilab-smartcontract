@@ -79,6 +79,19 @@ fn require_escrow_not_paused(env: &Env) {
     }
 }
 
+/// A suspended driver's profile is frozen for audit purposes: the reputation
+/// minting entry points (`increase_reputation`, `award_reputation`) must
+/// reject updates while `DriverStatus::Suspended` is set.  Penalties
+/// (`decrease_reputation`) deliberately do **not** use this gate — disciplinary
+/// action, e.g. a dispute ruling against the driver, must still land while the
+/// driver is suspended, otherwise suspension would shield wrongdoers from
+/// punishment.
+fn require_driver_not_suspended(env: &Env, profile: &DriverProfile) {
+    if profile.status == DriverStatus::Suspended {
+        panic_with_error!(env, FaniLabError::InvalidState);
+    }
+}
+
 #[contract]
 pub struct IdentityReputationContract;
 
@@ -392,6 +405,10 @@ impl IdentityReputationContract {
         );
     }
 
+    /// Credit a driver for a completed delivery.
+    ///
+    /// Rejected with `InvalidState` while the driver is suspended — a frozen
+    /// profile must not gain reputation until `reinstate_driver` restores it.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn increase_reputation(
         env: Env,
@@ -413,6 +430,8 @@ impl IdentityReputationContract {
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
+
+        require_driver_not_suspended(&env, &profile);
 
         let config = Self::get_reputation_config(env.clone());
 
@@ -455,6 +474,12 @@ impl IdentityReputationContract {
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    /// Penalize a driver by `points` (e.g. after an adverse dispute ruling).
+    ///
+    /// Deliberately **not** gated on driver suspension: penalties must still
+    /// land while a driver is suspended, otherwise suspension would shield
+    /// wrongdoers from punishment. Only the reputation-minting entry points
+    /// (`increase_reputation`, `award_reputation`) freeze on suspension.
     pub fn decrease_reputation(env: Env, caller: Address, driver: Address, points: u32) {
         require_escrow_not_paused(&env);
         if !Self::is_authorized_contract(env.clone(), caller.clone()) {
@@ -491,6 +516,9 @@ impl IdentityReputationContract {
     /// dispute ruling in the driver's favour is not a delivery completion, and
     /// counting it as one would double-count if the delivery is later confirmed.
     /// The resulting score is still capped at `MAX_REPUTATION`.
+    ///
+    /// Rejected with `InvalidState` while the driver is suspended — a frozen
+    /// profile must not gain reputation until `reinstate_driver` restores it.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn award_reputation(env: Env, caller: Address, driver: Address, points: u32) {
         require_escrow_not_paused(&env);
@@ -505,6 +533,8 @@ impl IdentityReputationContract {
             .persistent()
             .get(&key)
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::ProviderNotFound));
+
+        require_driver_not_suspended(&env, &profile);
 
         profile.reputation_score = reputation_up(profile.reputation_score, points);
 
@@ -548,8 +578,10 @@ impl IdentityReputationContract {
     /// again to reset their score, since that function is idempotent and
     /// returns the existing profile unchanged.
     ///
-    /// Gating `assign_driver` on suspension status is a follow-up task in
-    /// `delivery_contract`.
+    /// Reputation minting (`increase_reputation`, `award_reputation`) is
+    /// rejected with `InvalidState` while the driver is suspended; penalties
+    /// (`decrease_reputation`) still apply.  Gating `assign_driver` on
+    /// suspension status lives in `delivery_contract`.
     ///
     /// **Authorization:** Admin only.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
