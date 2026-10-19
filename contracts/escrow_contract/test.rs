@@ -2,7 +2,7 @@ extern crate std;
 
 use super::*;
 use proptest::prelude::*;
-use shared_types::{DeliveryId, EscrowReleasedEvent, FaniLabError};
+use shared_types::{DeliveryId, EscrowFundedEvent, EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
@@ -424,6 +424,32 @@ fn test_create_escrow_duplicate_delivery_rejected() {
         Err(Ok(err)) => assert_eq!(err, EscrowError::DuplicateDelivery.into()),
         _ => panic!("Expected EscrowError::DuplicateDelivery"),
     }
+}
+
+#[test]
+fn test_create_escrow_emits_typed_funded_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &10u64, &token, &1000, &None);
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, events::escrow_funded(&env));
+    let funded: EscrowFundedEvent =
+        EscrowFundedEvent::try_from_val(&env, &data).expect("invalid escrow_funded payload");
+    assert_eq!(funded.delivery_id, 10);
+    assert_eq!(funded.sender, sender);
+    assert_eq!(funded.token, token);
+    assert_eq!(funded.amount, 1000);
 }
 
 #[test]
