@@ -1,7 +1,7 @@
 #![no_std]
 
 use shared_types::{
-    DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError, StorageKey,
+    is_admin, DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError, StorageKey,
 };
 
 // Settlement contract for cross-border currency swaps through an admin-configured router.
