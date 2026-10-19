@@ -2,6 +2,10 @@
 
 use soroban_sdk::{contracterror, contracttype, Address, String};
 
+/// Escrows at or above this raw-token amount require two distinct mediator
+/// approvals before a dispute verdict may move funds.
+pub const HIGH_VALUE_DISPUTE_THRESHOLD: i128 = 1_000_000;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

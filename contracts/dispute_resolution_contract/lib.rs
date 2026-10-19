@@ -3,7 +3,7 @@
 use shared_types::{
     events, ttl, DeliveryId, DeliveryStatus, DisputeRaisedEvent, DisputeResolvedPayoutEvent,
     DisputeResolvedRefundEvent, DisputeResolvedSplitEvent, EscrowRecord, EscrowStatus,
-    FaniLabError,
+    FaniLabError, HIGH_VALUE_DISPUTE_THRESHOLD,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
@@ -139,6 +139,7 @@ pub enum DataKey {
     DisputeTimeLimit,
     DisputeResolutionLimit,
     Dispute(DeliveryId),
+    PendingResolution(DeliveryId),
     DisputeReputationPenalty,
     DisputeReputationReward,
     DisputeSplitPenalty,
@@ -147,6 +148,21 @@ pub enum DataKey {
     DisputeIndex(u32),
     /// Total number of disputes ever recorded (monotonically increasing).
     DisputeIndexLen,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResolutionVerdict {
+    RefundSender,
+    PayDriver,
+    Split(u32),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingResolution {
+    approver: Address,
+    verdict: ResolutionVerdict,
 }
 
 /// Number of dispute IDs stored per index page.  Matches the paging
@@ -188,7 +204,7 @@ impl DisputeResolutionContract {
     /// `escrow_contract::resolve_dispute`'s own guard remains the
     /// authoritative check; this is a fail-fast layer with one implementation
     /// shared by all three entry points.
-    fn require_escrow_paused(env: &Env, delivery_id: DeliveryId) {
+    fn require_escrow_paused(env: &Env, delivery_id: DeliveryId) -> EscrowRecord {
         let escrow_addr: Address = env
             .storage()
             .instance()
@@ -202,6 +218,51 @@ impl DisputeResolutionContract {
         if escrow.status != EscrowStatus::Paused {
             panic_with_error!(env, FaniLabError::InvalidState);
         }
+        escrow
+    }
+
+    fn require_resolution_approval(
+        env: &Env,
+        caller: &Address,
+        delivery_id: DeliveryId,
+        escrow_amount: i128,
+        verdict: ResolutionVerdict,
+    ) -> bool {
+        if escrow_amount < HIGH_VALUE_DISPUTE_THRESHOLD {
+            return true;
+        }
+
+        let key = DataKey::PendingResolution(delivery_id);
+        if let Some(pending) = env.storage().persistent().get::<_, PendingResolution>(&key) {
+            if pending.verdict == verdict
+                && pending.approver != *caller
+                && DisputeResolutionContract::is_admin(env.clone(), pending.approver)
+            {
+                env.storage().persistent().remove(&key);
+                return true;
+            }
+        }
+
+        env.storage().persistent().set(
+            &key,
+            &PendingResolution {
+                approver: caller.clone(),
+                verdict,
+            },
+        );
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.events().publish(
+            (
+                Symbol::new(env, "resolution_approval_requested"),
+                delivery_id,
+            ),
+            (caller.clone(), escrow_amount),
+        );
+        false
     }
 }
 
@@ -856,7 +917,16 @@ impl DisputeResolutionContract {
 
         // Issue #211: reject a non-Paused escrow before any state mutation or
         // cross-contract side effect (the reputation adjustment below).
-        Self::require_escrow_paused(&env, delivery_id);
+        let escrow = Self::require_escrow_paused(&env, delivery_id);
+        if !Self::require_resolution_approval(
+            &env,
+            &caller,
+            delivery_id,
+            escrow.amount,
+            ResolutionVerdict::RefundSender,
+        ) {
+            return;
+        }
 
         dispute.status = DisputeStatus::ResolvedRefund;
         dispute.resolved_at = Some(env.ledger().timestamp());
@@ -905,7 +975,7 @@ impl DisputeResolutionContract {
             &Symbol::new(&env, "resolve_dispute"),
             soroban_sdk::vec![
                 &env,
-                caller.into_val(&env),
+                env.current_contract_address().into_val(&env),
                 u64::from(delivery_id).into_val(&env),
                 false.into_val(&env),
             ],
@@ -971,7 +1041,16 @@ impl DisputeResolutionContract {
         // Issue #211: reject a non-Paused escrow before any state mutation or
         // cross-contract side effect, via the same shared precondition used by
         // the other two resolution entry points.
-        Self::require_escrow_paused(&env, delivery_id);
+        let escrow = Self::require_escrow_paused(&env, delivery_id);
+        if !Self::require_resolution_approval(
+            &env,
+            &caller,
+            delivery_id,
+            escrow.amount,
+            ResolutionVerdict::Split(sender_share_bps),
+        ) {
+            return;
+        }
 
         dispute.status = DisputeStatus::Split;
         dispute.resolved_at = Some(env.ledger().timestamp());
@@ -1016,7 +1095,7 @@ impl DisputeResolutionContract {
             &Symbol::new(&env, "resolve_dispute_split"),
             soroban_sdk::vec![
                 &env,
-                caller.into_val(&env),
+                env.current_contract_address().into_val(&env),
                 u64::from(delivery_id).into_val(&env),
                 sender_share_bps.into_val(&env),
             ],
@@ -1064,7 +1143,16 @@ impl DisputeResolutionContract {
 
         // Issue #211: reject a non-Paused escrow before any state mutation or
         // cross-contract side effect (the reputation adjustment below).
-        Self::require_escrow_paused(&env, delivery_id);
+        let escrow = Self::require_escrow_paused(&env, delivery_id);
+        if !Self::require_resolution_approval(
+            &env,
+            &caller,
+            delivery_id,
+            escrow.amount,
+            ResolutionVerdict::PayDriver,
+        ) {
+            return;
+        }
 
         dispute.status = DisputeStatus::ResolvedPayout;
         dispute.resolved_at = Some(env.ledger().timestamp());
@@ -1084,7 +1172,7 @@ impl DisputeResolutionContract {
             &Symbol::new(&env, "resolve_dispute"),
             soroban_sdk::vec![
                 &env,
-                caller.into_val(&env),
+                env.current_contract_address().into_val(&env),
                 u64::from(delivery_id).into_val(&env),
                 true.into_val(&env),
             ],

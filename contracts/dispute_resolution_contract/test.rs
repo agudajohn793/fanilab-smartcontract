@@ -696,6 +696,53 @@ fn test_resolve_dispute_refund_sender_by_admin() {
 }
 
 #[test]
+fn test_high_value_dispute_requires_two_distinct_mediators() {
+    let (env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+    let second_admin = Address::generate(&env);
+    bootstrap_admin(&dispute_client, &admin, &second_admin);
+
+    let mut delivery_record = create_mock_delivery_record(
+        &env,
+        did(40),
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Active,
+        None,
+    );
+    delivery_record.driver = Some(driver.clone());
+    set_mock_delivery(&env, &delivery_id, did(40), &delivery_record);
+
+    let mut escrow_record = create_mock_escrow_record(
+        sender.clone(),
+        recipient,
+        driver,
+        Address::generate(&env),
+        shared_types::EscrowStatus::Paused,
+    );
+    escrow_record.amount = HIGH_VALUE_DISPUTE_THRESHOLD;
+    set_mock_escrow(&env, &escrow_id, 40, &escrow_record);
+    dispute_client.raise_dispute(&sender, &did(40));
+
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(40));
+    assert_eq!(
+        dispute_client.get_dispute(&did(40)).status,
+        DisputeStatus::Open
+    );
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(40));
+    assert_eq!(
+        dispute_client.get_dispute(&did(40)).status,
+        DisputeStatus::Open
+    );
+
+    dispute_client.resolve_dispute_refund_sender(&second_admin, &did(40));
+    assert_eq!(
+        dispute_client.get_dispute(&did(40)).status,
+        DisputeStatus::ResolvedRefund
+    );
+}
+
+#[test]
 #[should_panic(expected = "HostError: Error(Contract, #1)")] // FaniLabError::Unauthorized
 fn test_unauthorized_resolve_dispute_fails() {
     let (env, _admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =

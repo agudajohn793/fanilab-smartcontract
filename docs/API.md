@@ -589,6 +589,10 @@ Admin resolution: release to driver or refund to sender.
 
 **Authorization:** Admin only
 
+For escrows of at least 1,000,000 raw token units, direct admin calls are
+rejected; high-value verdicts must go through `dispute_resolution_contract`
+and receive approval from two distinct mediators.
+
 **Errors:**
 - `Unauthorized` - Caller not admin
 - `InvalidState` - Escrow not in Paused state
@@ -613,6 +617,10 @@ Admin resolution: split funds between sender and driver.
 - `sender_share_bps: u32` - Sender's share in basis points (0-10000)
 
 **Authorization:** Admin only
+
+For escrows of at least 1,000,000 raw token units, direct admin calls are
+rejected; high-value verdicts must go through `dispute_resolution_contract`
+and receive approval from two distinct mediators.
 
 **Errors:**
 - `Unauthorized` - Caller not admin
@@ -1938,6 +1946,12 @@ Admin verdict: full refund to sender. Applies a reputation penalty to the driver
 - `delivery_id: DeliveryId` - Delivery identifier
 
 **Authorization:** Admin only
+
+Escrows of at least 1,000,000 raw token units require two distinct admins to
+approve the same verdict. The first call records the proposed verdict without
+moving funds; a different admin must call the same resolution entry point with
+the same verdict to execute it. Lower-value escrow verdicts continue to execute
+on the first call.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin

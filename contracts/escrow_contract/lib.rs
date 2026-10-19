@@ -2,7 +2,7 @@
 
 use shared_types::{
     escrow_key, events, is_admin, ttl, DeliveryRecord, DeliveryStatus, EscrowRecord, EscrowStatus,
-    FaniLabError, ProtocolConfig, StorageKey,
+    FaniLabError, ProtocolConfig, StorageKey, HIGH_VALUE_DISPUTE_THRESHOLD,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -48,6 +48,25 @@ fn require_admin(env: &Env, caller: &Address) {
         .get(&StorageKey::Admin)
         .unwrap_or_else(|| panic_with_error!(env, FaniLabError::NotInitialized));
     if *caller != stored_admin {
+        panic_with_error!(env, FaniLabError::Unauthorized);
+    }
+}
+
+fn require_dispute_resolution_caller(env: &Env, caller: &Address, amount: i128) {
+    if let Some(dispute_contract) = env
+        .storage()
+        .instance()
+        .get::<_, Address>(&DataKey::DisputeResolutionContract)
+    {
+        if *caller == dispute_contract {
+            caller.require_auth();
+            return;
+        }
+    }
+
+    caller.require_auth();
+    require_admin(env, caller);
+    if amount >= HIGH_VALUE_DISPUTE_THRESHOLD {
         panic_with_error!(env, FaniLabError::Unauthorized);
     }
 }
@@ -1690,10 +1709,9 @@ impl EscrowContract {
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn resolve_dispute(env: Env, caller: Address, delivery_id: u64, release_to_driver: bool) {
-        caller.require_auth();
         require_not_paused(&env);
-        require_admin(&env, &caller);
         let mut record = load_escrow(&env, delivery_id);
+        require_dispute_resolution_caller(&env, &caller, record.amount);
         if record.status != EscrowStatus::Paused {
             panic_with_error!(&env, EscrowError::InvalidState);
         }
@@ -1799,28 +1817,15 @@ impl EscrowContract {
         delivery_id: u64,
         sender_share_bps: u32,
     ) {
-        caller.require_auth();
         require_not_paused(&env);
-        // Allow calls from either the admin or the dispute resolution contract.
-        // This enables both admin-initiated resolutions and automatic force-resolve
-        // timeouts (where the dispute_resolution_contract calls on its own behalf).
-        let is_caller_admin = is_admin(&env, &caller);
-        let is_caller_dispute_contract = if let Some(dispute_contract) =
-            env.storage()
-                .instance()
-                .get::<_, Address>(&DataKey::DisputeResolutionContract)
-        {
-            caller == dispute_contract
-        } else {
-            false
-        };
-        if !is_caller_admin && !is_caller_dispute_contract {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
-        }
+        let mut record = load_escrow(&env, delivery_id);
+        // When dispute resolution is configured, only that contract may invoke
+        // this entry point for high-value escrows. It enforces mediator
+        // approvals; allowing direct admin calls would bypass the threshold.
+        require_dispute_resolution_caller(&env, &caller, record.amount);
         if sender_share_bps > 10000 {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
-        let mut record = load_escrow(&env, delivery_id);
         if record.status != EscrowStatus::Paused {
             panic_with_error!(&env, EscrowError::InvalidState);
         }

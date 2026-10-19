@@ -3473,6 +3473,49 @@ fn test_resolve_dispute_rejected_while_paused() {
 }
 
 #[test]
+fn test_configured_dispute_contract_blocks_direct_admin_resolution() {
+    let (env, contract_id) = setup_env();
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token = setup_token(&env, &Address::generate(&env));
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let dispute_contract = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, HIGH_VALUE_DISPUTE_THRESHOLD);
+    client.create_escrow(
+        &sender,
+        &recipient,
+        &driver,
+        &1940u64,
+        &token,
+        &HIGH_VALUE_DISPUTE_THRESHOLD,
+        &None,
+    );
+    client.set_dispute_resolution_contract(&admin, &dispute_contract);
+    env.as_contract(&contract_id, || {
+        let key = shared_types::escrow_key(1940);
+        let mut record: EscrowRecord = env.storage().persistent().get(&key).unwrap();
+        record.status = EscrowStatus::Paused;
+        env.storage().persistent().set(&key, &record);
+    });
+
+    let result = client.try_resolve_dispute(&admin, &1940u64, &true);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected configured dispute contract to gate direct resolution"),
+    }
+
+    let split_result = client.try_resolve_dispute_split(&admin, &1940u64, &5000);
+    match split_result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected configured dispute contract to gate direct split resolution"),
+    }
+}
+
+#[test]
 fn test_resolve_dispute_split_rejected_while_paused() {
     let (env, contract_id, admin, _sender, _recipient, _driver) = setup_paused_with_escrow(907);
     let client = EscrowContractClient::new(&env, &contract_id);
