@@ -951,6 +951,19 @@ fn test_admin_can_suspend_driver() {
     assert!(client.is_driver_suspended(&driver));
 }
 
+#[test]
+fn test_authorized_contract_can_suspend_driver() {
+    let (env, admin, client, _, dispute_contract) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.suspend_driver(&dispute_contract, &driver);
+
+    assert!(client.is_driver_suspended(&driver));
+    client.reinstate_driver(&admin, &driver);
+    assert!(!client.is_driver_suspended(&driver));
+}
+
 /// Admin can reinstate a suspended driver; status returns to Active.
 #[test]
 fn test_admin_can_reinstate_suspended_driver() {

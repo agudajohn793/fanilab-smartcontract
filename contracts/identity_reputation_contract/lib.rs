@@ -625,11 +625,13 @@ impl IdentityReputationContract {
     /// (`decrease_reputation`) still apply.  Gating `assign_driver` on
     /// suspension status lives in `delivery_contract`.
     ///
-    /// **Authorization:** Admin only.
+    /// **Authorization:** Admin or an authorized contract.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional
-    pub fn suspend_driver(env: Env, admin: Address, driver: Address) {
-        admin.require_auth();
-        if !is_admin(&env, &admin) {
+    pub fn suspend_driver(env: Env, caller: Address, driver: Address) {
+        caller.require_auth();
+        if !is_admin(&env, &caller)
+            && !Self::is_authorized_contract(env.clone(), caller.clone())
+        {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
@@ -656,7 +658,7 @@ impl IdentityReputationContract {
             (events::driver_suspended(&env),),
             DriverSuspendedEvent {
                 driver,
-                admin,
+                admin: caller,
             },
         );
     }

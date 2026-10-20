@@ -336,6 +336,8 @@ pub mod ttl {
     pub const LEDGER_TTL_EXTEND_TO: u32 = 1036800;
 }
 
+pub const SETTLEMENT_SWAP_DEADLINE_WINDOW_SECONDS: u64 = 300;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryCreatedEvent {
@@ -606,7 +608,7 @@ pub struct DriverRegisteredEvent {
 pub struct DriverSuspendedEvent {
     /// Driver address whose profile was suspended.
     pub driver: Address,
-    /// Admin address that performed the suspension.
+    /// Address that performed the suspension (admin or authorized contract).
     pub admin: Address,
 }
 
