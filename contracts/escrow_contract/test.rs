@@ -4,7 +4,7 @@ use super::*;
 use proptest::prelude::*;
 use shared_types::{DeliveryId, EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Deployer as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, IntoVal, TryFromVal, TryIntoVal, Val,
 };
@@ -1402,6 +1402,44 @@ fn test_sweep_untracked_balance_unauthorized_rejected() {
         Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected FaniLabError::Unauthorized"),
     }
+}
+
+#[test]
+fn test_sweep_untracked_balance_rejects_contract_as_recipient() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result = client.try_sweep_untracked_balance(&admin, &token, &contract_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for self-transfer"),
+    }
+}
+
+#[test]
+fn test_sweep_untracked_balance_extends_instance_ttl() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &contract_id, 100);
+
+    env.ledger().with_mut(|ledger| {
+        ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    client.sweep_untracked_balance(&admin, &token, &Address::generate(&env));
+
+    let remaining_ttl = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+        "sweep_untracked_balance must extend instance TTL (got {remaining_ttl})"
+    );
 }
 
 // ── Issue #90: clear_settlement_contract tests ──────────────────────────────
@@ -7042,28 +7080,68 @@ fn test_admin_freeze_funds_allowed_while_not_paused() {
 /// transition `freeze_funds` performs.
 #[test]
 fn test_admin_freeze_funds_on_holdback_escrow() {
-    let (env, contract_id) = setup_env();
-    let client = EscrowContractClient::new(&env, &contract_id);
+    let (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        _identity_addr,
+        _token,
+        admin,
+        _sender,
+        _recipient,
+        _driver,
+    ) = setup_wired_protocol(1000);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_addr);
+    let client = EscrowContractClient::new(&env, &escrow_addr);
 
-    let admin = Address::generate(&env);
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let driver = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = setup_token(&env, &token_admin);
+    let key = shared_types::delivery_key(delivery_id);
+    env.as_contract(&delivery_addr, || {
+        let mut record: shared_types::DeliveryRecord =
+            env.storage().persistent().get(&key).unwrap();
+        record.status = delivery_contract::DeliveryStatus::Delivered;
+        env.storage().persistent().set(&key, &record);
+    });
+    client.mark_holdback_escrow(&delivery_addr, &u64::from(delivery_id));
+    client.admin_freeze_funds(&admin, &u64::from(delivery_id));
 
-    client.init(&admin, &token, &0);
-    mint(&env, &token, &sender, 1000);
-    let delivery_contract = Address::generate(&env);
-    client.create_escrow(
-        &sender, &recipient, &driver, &10402u64, &token, &1000, &None,
+    let record = client.get_escrow(&u64::from(delivery_id));
+    assert_eq!(record.status, EscrowStatus::Paused);
+    assert_eq!(record.disputed_by, Some(admin.clone()));
+    assert_eq!(
+        delivery_client.get_delivery(&delivery_id).status,
+        delivery_contract::DeliveryStatus::Disputed
     );
-    client.set_delivery_contract(&admin, &delivery_contract);
-    client.mark_holdback_escrow(&delivery_contract, &10402u64);
+}
 
-    client.admin_freeze_funds(&admin, &10402u64);
+#[test]
+fn test_admin_freeze_funds_synchronizes_delivery_and_records_admin() {
+    let (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        _identity_addr,
+        _token,
+        admin,
+        _sender,
+        _recipient,
+        _driver,
+    ) = setup_wired_protocol(1000);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_addr);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_addr);
 
-    assert_eq!(client.get_escrow(&10402u64).status, EscrowStatus::Paused);
+    escrow_client.admin_freeze_funds(&admin, &u64::from(delivery_id));
+
+    let record = escrow_client.get_escrow(&u64::from(delivery_id));
+    assert_eq!(record.status, EscrowStatus::Paused);
+    assert_eq!(record.disputed_by, Some(admin));
+    assert_eq!(
+        delivery_client.get_delivery(&delivery_id).status,
+        delivery_contract::DeliveryStatus::Disputed
+    );
 }
 
 /// Only the protocol admin may use the admin override; the sender, recipient and

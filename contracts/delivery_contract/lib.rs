@@ -1025,6 +1025,61 @@ impl DeliveryContract {
         );
     }
 
+    /// Synchronize an administrator-initiated escrow freeze with this delivery.
+    ///
+    /// Only the configured escrow contract may call this endpoint; it invokes
+    /// the method after authenticating the admin and freezing the escrow.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn sync_dispute_from_escrow(
+        env: Env,
+        caller: Address,
+        reporter: Address,
+        delivery_id: DeliveryId,
+    ) {
+        caller.require_auth();
+        let escrow_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != escrow_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let key = delivery_key(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
+
+        match delivery.status {
+            DeliveryStatus::Pending
+            | DeliveryStatus::Active
+            | DeliveryStatus::InTransit
+            | DeliveryStatus::Delivered => {}
+            DeliveryStatus::Disputed => return,
+            _ => panic_with_error!(&env, FaniLabError::InvalidState),
+        }
+
+        let timestamp = env.ledger().timestamp();
+        delivery.status = DeliveryStatus::Disputed;
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.events().publish(
+            (events::delivery_disputed(&env),),
+            DeliveryDisputedEvent {
+                delivery_id: delivery_id.value(),
+                reporter,
+                timestamp,
+            },
+        );
+    }
+
     /// Transitions a delivery from `DeliveryStatus::Disputed` to `DeliveryStatus::Resolved`.
     ///
     /// **Authorization:** the configured `dispute_resolution_contract` only (Issue #447).

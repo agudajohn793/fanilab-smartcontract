@@ -4,7 +4,7 @@ use super::*;
 use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus, FaniLabError};
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Deployer as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, String, Symbol, TryFromVal, Val,
 };
@@ -2260,6 +2260,51 @@ fn test_peer_setters_publish_events() {
     let (topics, _) = last_event(&env);
     let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "escrow_contract_set"));
+}
+
+#[test]
+fn test_peer_pointer_setters_extend_instance_ttl() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let dispute_id = dispute_client.address.clone();
+
+    for setter in 0..3 {
+        env.ledger().with_mut(|ledger| {
+            ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+        });
+        let new_address = Address::generate(&env);
+        match setter {
+            0 => dispute_client.set_delivery_contract(&admin, &new_address),
+            1 => dispute_client.set_escrow_contract(&admin, &new_address),
+            _ => dispute_client.set_identity_reputation_contract(&admin, &new_address),
+        }
+        let remaining_ttl = env.deployer().get_contract_instance_ttl(&dispute_id);
+        assert!(
+            remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+            "peer pointer setter {setter} must extend instance TTL (got {remaining_ttl})"
+        );
+    }
+}
+
+#[test]
+fn test_reputation_config_setters_extend_instance_ttl() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let dispute_id = dispute_client.address.clone();
+
+    for setter in 0..3 {
+        env.ledger().with_mut(|ledger| {
+            ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+        });
+        match setter {
+            0 => dispute_client.set_dispute_reputation_penalty(&admin, &11),
+            1 => dispute_client.set_dispute_reputation_reward(&admin, &6),
+            _ => dispute_client.set_dispute_split_penalty(&admin, &6),
+        }
+        let remaining_ttl = env.deployer().get_contract_instance_ttl(&dispute_id);
+        assert!(
+            remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+            "reputation config setter {setter} must extend instance TTL (got {remaining_ttl})"
+        );
+    }
 }
 
 /// Issue #447: Integration tests proving delivery record correctly reaches

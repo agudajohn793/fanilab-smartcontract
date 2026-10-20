@@ -130,6 +130,7 @@ fn apply_freeze_funds(env: &Env, actor: &Address, delivery_id: u64) {
     match record.status {
         EscrowStatus::Locked | EscrowStatus::Holdback => {
             record.status = EscrowStatus::Paused;
+            record.disputed_by = Some(actor.clone());
             record.disputed_at = Some(env.ledger().timestamp());
             save_escrow(env, delivery_id, &record);
             env.events().publish(
@@ -2098,6 +2099,18 @@ impl EscrowContract {
         require_admin(&env, &admin);
         // Intentionally NOT gated on require_not_paused — see above.
         apply_freeze_funds(&env, &admin, delivery_id);
+        if let Some(delivery_contract) = get_delivery_contract(&env) {
+            let _: () = env.invoke_contract(
+                &delivery_contract,
+                &Symbol::new(&env, "sync_dispute_from_escrow"),
+                soroban_sdk::vec![
+                    &env,
+                    env.current_contract_address().into_val(&env),
+                    admin.into_val(&env),
+                    shared_types::DeliveryId::from(delivery_id).into_val(&env),
+                ],
+            );
+        }
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -2204,6 +2217,11 @@ impl EscrowContract {
     ) -> i128 {
         admin.require_auth();
         require_admin(&env, &admin);
+        extend_instance_ttl(&env);
+
+        if recipient == env.current_contract_address() {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
 
         let contract_balance =
             token::Client::new(&env, &token).balance(&env.current_contract_address());

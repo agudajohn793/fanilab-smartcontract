@@ -389,6 +389,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382 precedent: emit an event so off-chain indexers can track when
         // this contract pointer is updated by an admin.
         env.events().publish(
@@ -409,6 +412,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_set"),),
             (caller, escrow_contract),
@@ -428,6 +434,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &reputation_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382: emit event so off-chain indexers can track when this critical
         // contract pointer is updated by an admin.
         env.events().publish(
@@ -466,6 +475,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_penalty_updated"),),
             (caller, old_penalty, penalty),
@@ -497,6 +509,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationReward, &reward);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_reward_updated"),),
             (caller, old_reward, reward),
@@ -527,6 +542,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeSplitPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_split_penalty_updated"),),
             (caller, old_penalty, penalty),
