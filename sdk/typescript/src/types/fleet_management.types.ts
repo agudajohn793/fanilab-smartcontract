@@ -6,18 +6,16 @@ import { DriverFleetStatus, FleetProfile, PendingTreasuryChange } from './common
  * `FaniLabError` codes in `common.types.ts`.
  */
 export const FleetErrorCodes = {
-  AlreadyInitialized: 1,
-  NotInitialized: 2,
-  Unauthorized: 3,
   FleetNotFound: 4,
   DriverAlreadyInvited: 5,
   InviteNotFound: 6,
   DriverAlreadyActive: 7,
   NoPendingTreasuryChange: 8,
-  TimelockNotElapsed: 9,
   FleetInactive: 10,
   InvalidConfiguration: 11,
   InternalStorageError: 12,
+  DriverNotRegistered: 13,
+  RosterFull: 14,
 } as const;
 
 export interface RegisterFleetParams {
@@ -40,6 +38,11 @@ export interface FleetIdParams {
 }
 
 export interface DeactivateFleetParams {
+  caller: string;
+  fleetId: bigint;
+}
+
+export interface ReactivateFleetParams {
   caller: string;
   fleetId: bigint;
 }

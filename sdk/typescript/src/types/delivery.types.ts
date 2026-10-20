@@ -44,12 +44,13 @@ export enum DeliveryErrorCode {
  * Distinct from the shared `FaniLabError` codes in `common.types.ts`.
  */
 export const DeliveryErrorCodes = {
-  InvalidState: 1,
   InvalidMetadata: 2,
   BatchTooLarge: 3,
   InvalidDriver: 4,
   InvalidParties: 5,
   EscrowNotLocked: 6,
+  NoPendingContractChange: 7,
+  ContractChangeTimelockNotElapsed: 8,
 } as const;
 
 export interface CreateDeliveryParams {

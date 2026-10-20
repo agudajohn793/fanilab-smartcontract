@@ -122,6 +122,21 @@ impl MockEscrowContract {
             panic!("MockEscrowFailure");
         }
         let placeholder = _env.current_contract_address();
+        let sender = _env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&_env, "mock_sender"))
+            .unwrap_or_else(|| placeholder.clone());
+        let recipient = _env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&_env, "mock_recipient"))
+            .unwrap_or_else(|| placeholder.clone());
+        let driver = _env
+            .storage()
+            .temporary()
+            .get(&Symbol::new(&_env, "mock_driver"))
+            .unwrap_or_else(|| placeholder.clone());
         let status = if delivery_id == 8888 {
             shared_types::EscrowStatus::Refunded
         } else if _env
@@ -164,10 +179,10 @@ impl MockEscrowContract {
         };
         shared_types::EscrowRecord {
             delivery_id: 0,
-            sender: placeholder.clone(),
-            recipient: placeholder.clone(),
-            driver: placeholder.clone(),
-            token: placeholder,
+            sender,
+            recipient,
+            driver,
+            token: _env.current_contract_address(),
             amount: 0,
             status,
             created_at: _env.ledger().timestamp(),
@@ -177,6 +192,18 @@ impl MockEscrowContract {
             holdback_started_at: None,
             fleet_id: None,
         }
+    }
+
+    pub fn set_parties(_env: Env, sender: Address, recipient: Address, driver: Address) {
+        _env.storage()
+            .temporary()
+            .set(&Symbol::new(&_env, "mock_sender"), &sender);
+        _env.storage()
+            .temporary()
+            .set(&Symbol::new(&_env, "mock_recipient"), &recipient);
+        _env.storage()
+            .temporary()
+            .set(&Symbol::new(&_env, "mock_driver"), &driver);
     }
 }
 
@@ -352,6 +379,25 @@ fn get_test_metadata(env: &Env, delivery_id: u64) -> DeliveryMetadata {
         created_at: env.ledger().timestamp(),
         estimated_delivery: env.ledger().timestamp() + 86400,
     }
+}
+
+fn set_mock_escrow_parties(
+    env: &Env,
+    escrow_id: &Address,
+    sender: &Address,
+    recipient: &Address,
+    driver: &Address,
+) {
+    let _: () = env.invoke_contract(
+        escrow_id,
+        &Symbol::new(env, "set_parties"),
+        soroban_sdk::vec![
+            env,
+            sender.into_val(env),
+            recipient.into_val(env),
+            driver.into_val(env)
+        ],
+    );
 }
 
 #[test]
@@ -599,6 +645,19 @@ fn test_delivery_secondary_indexes_track_sender_and_recipient() {
     assert_eq!(recipient_deliveries.get(1), Some(third_id));
 
     assert_eq!(client.get_deliveries_by_sender(&Address::generate(&env)).len(), 0);
+}
+
+#[test]
+fn test_get_deliveries_page_rejects_unknown_kind() {
+    let env = Env::default();
+    let (client, _admin) = setup_bare(&env);
+    let owner = Address::generate(&env);
+
+    let result = client.try_get_deliveries_page(&owner, &3, &0, &10);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, DeliveryError::InvalidIndexKind.into()),
+        _ => panic!("Expected DeliveryError::InvalidIndexKind"),
+    }
 }
 
 #[test]
@@ -1078,9 +1137,10 @@ fn test_confirm_delivery_rejects_driver_matching_recipient() {
 #[test]
 fn test_get_combined_state_pending_delivery() {
     let env = Env::default();
-    let (client, shipper, _driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+    set_mock_escrow_parties(&env, &escrow_id, &shipper, &recipient, &driver);
 
     let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
 
@@ -1094,10 +1154,11 @@ fn test_get_combined_state_pending_delivery() {
 #[test]
 fn test_get_combined_state_active_delivery() {
     let env = Env::default();
-    let (client, shipper, driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
-    client.assign_driver(&driver, &delivery_id, &driver);
+    client.assign_driver(&shipper, &delivery_id, &driver);
+    set_mock_escrow_parties(&env, &escrow_id, &shipper, &recipient, &driver);
 
     let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
 
@@ -1111,11 +1172,12 @@ fn test_get_combined_state_active_delivery() {
 #[test]
 fn test_get_combined_state_in_transit_delivery() {
     let env = Env::default();
-    let (client, shipper, driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, shipper, driver, recipient, escrow_id, _) = setup_full(&env);
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
-    client.assign_driver(&driver, &delivery_id, &driver);
+    client.assign_driver(&shipper, &delivery_id, &driver);
     client.mark_in_transit(&driver, &delivery_id);
+    set_mock_escrow_parties(&env, &escrow_id, &shipper, &recipient, &driver);
 
     let (delivery, _escrow, is_synchronized) = client.get_combined_state(&delivery_id);
 
@@ -1158,6 +1220,35 @@ fn test_get_combined_state_no_escrow_returns_none_without_panic() {
         !is_synchronized,
         "An unfunded delivery is not synchronized with any escrow"
     );
+}
+
+#[test]
+fn test_get_combined_state_rejects_party_mismatches() {
+    let env = Env::default();
+    let (client, sender, driver, recipient, escrow_id, _) = setup_full(&env);
+    let delivery_id = client.create_delivery(&sender, &recipient, &get_test_metadata(&env, 1));
+
+    set_mock_escrow_parties(
+        &env,
+        &escrow_id,
+        &Address::generate(&env),
+        &recipient,
+        &driver,
+    );
+    assert!(!client.get_combined_state(&delivery_id).2);
+
+    set_mock_escrow_parties(&env, &escrow_id, &sender, &Address::generate(&env), &driver);
+    assert!(!client.get_combined_state(&delivery_id).2);
+
+    client.assign_driver(&sender, &delivery_id, &driver);
+    set_mock_escrow_parties(
+        &env,
+        &escrow_id,
+        &sender,
+        &recipient,
+        &Address::generate(&env),
+    );
+    assert!(!client.get_combined_state(&delivery_id).2);
 }
 
 // ── METADATA VALIDATION (Issue #96 - empty origin/destination and zero weight) ───────────────────
@@ -1204,6 +1295,17 @@ fn test_reject_empty_destination() {
         created_at: env.ledger().timestamp(),
         estimated_delivery: env.ledger().timestamp() + 86400,
     };
+
+    client.create_delivery(&shipper, &recipient, &metadata);
+}
+
+#[test]
+#[should_panic(expected = "2")]
+fn test_reject_identical_origin_and_destination() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let mut metadata = get_test_metadata(&env, 1);
+    metadata.destination = metadata.origin.clone();
 
     client.create_delivery(&shipper, &recipient, &metadata);
 }
@@ -1331,11 +1433,12 @@ fn test_accept_location_at_max_length() {
     let (client, shipper, _, recipient, _, _) = setup_full(&env);
 
     use shared_types::{CargoCategory, CargoDescriptor};
-    let max_string = String::from_str(&env, &"x".repeat(256));
+    let origin = String::from_str(&env, &"x".repeat(256));
+    let destination = String::from_str(&env, &"y".repeat(256));
     let metadata = DeliveryMetadata {
         delivery_id: 1,
-        origin: max_string.clone(),
-        destination: max_string,
+        origin,
+        destination,
         cargo_description: CargoDescriptor {
             weight_grams: 100,
             category: CargoCategory::General,
@@ -1393,6 +1496,28 @@ fn test_accept_minimum_valid_weight() {
 
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
     assert_eq!(delivery_id, 1);
+}
+
+#[test]
+#[should_panic(expected = "2")] // DeliveryError::InvalidMetadata
+fn test_create_delivery_rejects_single_character_origin() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let mut metadata = get_test_metadata(&env, 1);
+    metadata.origin = String::from_str(&env, "a");
+
+    client.create_delivery(&shipper, &recipient, &metadata);
+}
+
+#[test]
+#[should_panic(expected = "2")] // DeliveryError::InvalidMetadata
+fn test_create_delivery_rejects_single_character_destination() {
+    let env = Env::default();
+    let (client, shipper, _, recipient, _, _) = setup_full(&env);
+    let mut metadata = get_test_metadata(&env, 1);
+    metadata.destination = String::from_str(&env, "a");
+
+    client.create_delivery(&shipper, &recipient, &metadata);
 }
 
 #[test]
@@ -2290,6 +2415,34 @@ fn test_create_delivery_and_batch_emit_consistent_events() {
     );
 }
 
+#[test]
+fn test_delivery_emits_typed_created_and_driver_assigned_events() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no delivery_created event");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let created: DeliveryCreatedEvent =
+        DeliveryCreatedEvent::try_from_val(&env, &data).expect("invalid delivery_created payload");
+    assert_eq!(created.delivery_id, delivery_id.into());
+    assert_eq!(created.sender, shipper);
+
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no driver_assigned event");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let assigned: DriverAssignedEvent =
+        DriverAssignedEvent::try_from_val(&env, &data).expect("invalid driver_assigned payload");
+    assert_eq!(assigned.delivery_id, delivery_id.into());
+    assert_eq!(assigned.driver, driver);
+}
+
 // Tests for issue #269: delivery_contract secondary-index accessors and identity getter
 
 /// Minimal delivery client with only `init` run — deliberately does NOT
@@ -2340,6 +2493,27 @@ fn test_set_and_get_identity_reputation_contract_round_trip() {
         client.get_identity_reputation_contract(),
         Some(identity_contract)
     );
+}
+
+#[test]
+fn test_set_identity_reputation_contract_emits_audit_event() {
+    let env = Env::default();
+    let (client, admin) = setup_bare(&env);
+    let identity_contract = Address::generate(&env);
+
+    client.set_identity_reputation_contract(&admin, &identity_contract);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no event emitted");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let topic = Symbol::try_from_val(&env, &body.topics.get(0).unwrap()).unwrap();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let (event_admin, event_identity): (Address, Address) =
+        <(Address, Address)>::try_from_val(&env, &data).unwrap();
+
+    assert_eq!(topic, events::identity_reputation_contract_updated(&env));
+    assert_eq!(event_admin, admin);
+    assert_eq!(event_identity, identity_contract);
 }
 
 #[test]
@@ -2411,9 +2585,10 @@ fn test_index_contents_unchanged_after_delivery_cancellation() {
 #[test]
 fn test_reclaim_delivery_expired_escrow_from_pending_synchronises() {
     let env = Env::default();
-    let (client, _admin, _driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, admin, driver, recipient, escrow_id, _) = setup_full(&env);
 
-    let did = client.create_delivery(&_admin, &recipient, &get_test_metadata(&env, 1));
+    let did = client.create_delivery(&admin, &recipient, &get_test_metadata(&env, 1));
+    set_mock_escrow_parties(&env, &escrow_id, &admin, &recipient, &driver);
 
     // Delivery starts Pending; reclaim transitions it to Cancelled.
     client.reclaim_delivery_expired_escrow(&did);
@@ -2431,11 +2606,12 @@ fn test_reclaim_delivery_expired_escrow_from_pending_synchronises() {
 #[test]
 fn test_reclaim_delivery_expired_escrow_from_active_synchronises() {
     let env = Env::default();
-    let (client, _admin, driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, admin, driver, recipient, escrow_id, _) = setup_full(&env);
 
-    let did = client.create_delivery(&_admin, &recipient, &get_test_metadata(&env, 2));
+    let did = client.create_delivery(&admin, &recipient, &get_test_metadata(&env, 2));
     // Pending → Active via assign_driver
-    client.assign_driver(&driver, &did, &driver);
+    client.assign_driver(&admin, &did, &driver);
+    set_mock_escrow_parties(&env, &escrow_id, &admin, &recipient, &driver);
     assert_eq!(client.get_delivery(&did).status, DeliveryStatus::Active);
 
     client.reclaim_delivery_expired_escrow(&did);
@@ -2452,11 +2628,12 @@ fn test_reclaim_delivery_expired_escrow_from_active_synchronises() {
 #[test]
 fn test_reclaim_delivery_expired_escrow_from_in_transit_synchronises() {
     let env = Env::default();
-    let (client, _admin, driver, recipient, _escrow_id, _) = setup_full(&env);
+    let (client, admin, driver, recipient, escrow_id, _) = setup_full(&env);
 
-    let did = client.create_delivery(&_admin, &recipient, &get_test_metadata(&env, 3));
-    client.assign_driver(&driver, &did, &driver);
+    let did = client.create_delivery(&admin, &recipient, &get_test_metadata(&env, 3));
+    client.assign_driver(&admin, &did, &driver);
     client.mark_in_transit(&driver, &did);
+    set_mock_escrow_parties(&env, &escrow_id, &admin, &recipient, &driver);
     assert_eq!(client.get_delivery(&did).status, DeliveryStatus::InTransit);
 
     // Escrow reclaim succeeds and delivery is Cancelled.
@@ -2546,6 +2723,12 @@ fn test_set_escrow_contract_updates_peer_address() {
 
     client.set_escrow_contract(&shipper, &new_escrow);
 
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+
+    client.confirm_escrow_contract();
+
     assert_eq!(client.get_escrow_contract(), new_escrow);
 }
 
@@ -2583,6 +2766,10 @@ fn test_set_escrow_contract_requires_admin_auth() {
 
     let new_escrow = env.register(MockEscrowContract, ());
     client.set_escrow_contract(&admin, &new_escrow);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_escrow_contract();
 }
 
 /// A delivery created after the repoint uses the new escrow contract for its
@@ -2594,6 +2781,10 @@ fn test_set_escrow_contract_affects_later_deliveries() {
 
     let new_escrow_id = env.register(MockEscrowContract, ());
     client.set_escrow_contract(&shipper, &new_escrow_id);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_escrow_contract();
 
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);

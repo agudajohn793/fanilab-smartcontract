@@ -1,5 +1,11 @@
 export interface InitParams {
   admin: string;
+  escrowContract: string;
+}
+
+export interface SetDriverPreferenceParams {
+  driver: string;
+  toToken: string;
 }
 
 export interface ExecuteSettlementSwapParams {

@@ -21,6 +21,18 @@ build-dispute:
 	cargo build -p dispute_resolution_contract --target wasm32v1-none --release
 	@echo "Dispute resolution contract built successfully!"
 
+build-fleet:
+	cargo build -p fleet_management_contract --target wasm32v1-none --release
+	@echo "Fleet management contract built successfully!"
+
+build-identity:
+	cargo build -p identity_reputation_contract --target wasm32v1-none --release
+	@echo "Identity reputation contract built successfully!"
+
+build-settlement:
+	cargo build -p settlement_contract --target wasm32v1-none --release
+	@echo "Settlement contract built successfully!"
+
 clean:
 	cargo clean
 

@@ -1,7 +1,8 @@
 #![no_std]
 
 use shared_types::{
-    is_admin, DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError, StorageKey,
+    DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError,
+    PendingPeerContractChange, StorageKey,
 };
 
 // Settlement contract for cross-border currency swaps through an admin-configured router.
@@ -14,7 +15,7 @@ use soroban_sdk::{
 #[derive(Clone)]
 pub enum DataKey {
     EscrowContract,
-    SwapRouter,
+    PendingEscrowContract,
     /// Per-driver preferred payout asset recorded via
     /// `set_driver_preference` (Issue #459).
     DriverPreference(Address),
@@ -62,7 +63,8 @@ impl SettlementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
-    /// Update the escrow contract address. Admin only.
+    /// Propose an escrow contract address. Admin only; it takes effect after
+    /// a three-day review period and separate confirmation.
     ///
     /// Emits `escrow_contract_updated` so off-chain indexers can track
     /// escrow rotations (Issue #588).
@@ -76,20 +78,59 @@ impl SettlementContract {
         if admin != stored_admin {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::EscrowContract, &new_escrow);
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: new_escrow.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
 
         env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, new_escrow, activates_at),
+        );
+    }
+
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FaniLabError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
+        env.storage()
+            .instance()
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
             (shared_types::events::escrow_contract_updated(&env),),
             EscrowContractUpdatedEvent {
-                admin,
-                new_escrow,
+                admin: pending.proposed_by,
+                new_escrow: pending.address,
             },
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     /// Get the configured escrow contract address.
@@ -128,8 +169,8 @@ impl SettlementContract {
     ///
     /// Any driver may set (or overwrite) their own preference; the caller must
     /// authenticate as the driver. Stored in persistent storage so the entry
-    /// survives independently of the contract's instance entry, and its TTL is
-    /// extended on every write (Issue #459).
+    /// survives independently of the contract's instance entry, and both the
+    /// preference and instance-entry TTLs are extended on every write (Issue #459).
     ///
     /// Emits `driver_preference_updated` so indexers can track preference
     /// changes (Issue #589).
@@ -141,6 +182,10 @@ impl SettlementContract {
         env.storage().persistent().set(&key, &to_token);
         env.storage().persistent().extend_ttl(
             &key,
+            shared_types::ttl::LEDGER_TTL_THRESHOLD,
+            shared_types::ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.storage().instance().extend_ttl(
             shared_types::ttl::LEDGER_TTL_THRESHOLD,
             shared_types::ttl::LEDGER_TTL_EXTEND_TO,
         );
