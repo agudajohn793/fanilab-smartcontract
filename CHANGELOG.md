@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- Shared `Unauthorized`, `AlreadyInitialized`, `NotInitialized`, `InvalidState`, `DeliveryNotFound`, `InsufficientFunds`, `DuplicateDelivery`, and `TimelockNotElapsed` failures now consistently use `FaniLabError` across contracts instead of contract-specific duplicate variants. `TimelockNotElapsed` is assigned shared code 13; integrations should resolve these shared errors against the `FaniLabError` mapping.
+
 ### Security
 - `identity_reputation_contract::increase_reputation` and `award_reputation` now reject with `InvalidState` while the target driver is suspended, freezing a suspended driver's profile so no reputation can be earned until `reinstate_driver` restores it. `decrease_reputation` is deliberately **not** gated — disciplinary penalties (e.g. a dispute ruling against the driver) must still land while a driver is suspended, otherwise suspension would shield wrongdoers from punishment. Regression tests pin the gate, the penalty exemption, and that reinstatement resumes scoring from the preserved score.
 - **BREAKING (authorization):** `delivery_contract::raise_dispute` is now callable only by the configured `dispute_resolution_contract`; the sender / recipient / driver checks are removed (Issue #444). Previously any involved party could pause the escrow directly, which skipped the dispute state machine entirely: no `DisputeCase` was recorded, and because every admin resolution entry point requires one, the escrow funds were permanently locked and unrecoverable. Authentication of the human party is now solely the dispute contract's responsibility.

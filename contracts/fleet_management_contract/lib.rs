@@ -4,7 +4,7 @@ use shared_types::{
     events, is_admin, ttl, DriverInvitedEvent, DriverProfile, DriverRemovedEvent,
     FleetDeactivatedEvent, FleetOwnerReassignedEvent, FleetReactivatedEvent, FleetRegisteredEvent,
     FleetTreasuryChangeProposedEvent, FleetTreasuryForceUpdatedEvent, FleetTreasuryUpdatedEvent,
-    InviteAcceptedEvent, PayoutRoutingFallbackEvent, StorageKey,
+    FaniLabError, InviteAcceptedEvent, PayoutRoutingFallbackEvent, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
@@ -128,7 +128,7 @@ fn require_signer_threshold(
     }
 
     if authorized_signer_count < profile.signature_threshold {
-        panic_with_error!(env, FleetError::Unauthorized);
+        panic_with_error!(env, FaniLabError::Unauthorized);
     }
 }
 
@@ -136,15 +136,11 @@ fn require_signer_threshold(
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum FleetError {
-    AlreadyInitialized = 1,
-    NotInitialized = 2,
-    Unauthorized = 3,
     FleetNotFound = 4,
     DriverAlreadyInvited = 5,
     InviteNotFound = 6,
     DriverAlreadyActive = 7,
     NoPendingTreasuryChange = 8,
-    TimelockNotElapsed = 9,
     FleetInactive = 10,
     InvalidConfiguration = 11,
     /// Roster compaction read a slot that was expected to exist but was absent
@@ -227,7 +223,7 @@ impl FleetManagementContract {
     /// Initialise the contract, setting the admin and zeroing the fleet counter.
     pub fn init(env: Env, admin: Address) {
         if env.storage().instance().has(&StorageKey::Admin) {
-            panic_with_error!(&env, FleetError::AlreadyInitialized);
+            panic_with_error!(&env, FaniLabError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&StorageKey::Admin, &admin);
@@ -243,7 +239,7 @@ impl FleetManagementContract {
     pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         env.storage()
             .instance()
@@ -268,7 +264,7 @@ impl FleetManagementContract {
     pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
         env.storage()
             .instance()
@@ -311,7 +307,7 @@ impl FleetManagementContract {
             .storage()
             .persistent()
             .get(&counter_key)
-            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
 
         let fleet_id: u64 = current + 1;
         env.storage().persistent().set(&counter_key, &fleet_id);
@@ -404,7 +400,7 @@ impl FleetManagementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
 
         if profile.owner != caller && !is_admin(&env, &caller) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         profile.active = false;
@@ -448,7 +444,7 @@ impl FleetManagementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
 
         if profile.owner != caller && !is_admin(&env, &caller) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         // Guard: fleet must currently be inactive.
@@ -497,7 +493,7 @@ impl FleetManagementContract {
         admin.require_auth();
 
         if !is_admin(&env, &admin) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let fleet_key = DataKey::Fleet(fleet_id);
@@ -576,7 +572,7 @@ impl FleetManagementContract {
         admin.require_auth();
 
         if !is_admin(&env, &admin) {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         let fleet_key = DataKey::Fleet(fleet_id);
@@ -706,7 +702,7 @@ impl FleetManagementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::NoPendingTreasuryChange));
 
         if env.ledger().timestamp() < pending.activates_at {
-            panic_with_error!(&env, FleetError::TimelockNotElapsed);
+            panic_with_error!(&env, FaniLabError::TimelockNotElapsed);
         }
 
         let mut profile: FleetProfile = env
@@ -1254,7 +1250,7 @@ impl FleetManagementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
 
         if profile.owner != owner {
-            panic_with_error!(&env, FleetError::Unauthorized);
+            panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
         require_signer_threshold(&env, &profile, &owner, &co_signers);

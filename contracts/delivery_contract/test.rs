@@ -2415,6 +2415,34 @@ fn test_create_delivery_and_batch_emit_consistent_events() {
     );
 }
 
+#[test]
+fn test_delivery_emits_typed_created_and_driver_assigned_events() {
+    let env = Env::default();
+    let (client, shipper, driver, recipient, _, _) = setup_full(&env);
+    let metadata = get_test_metadata(&env, 1);
+    let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no delivery_created event");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let created: DeliveryCreatedEvent =
+        DeliveryCreatedEvent::try_from_val(&env, &data).expect("invalid delivery_created payload");
+    assert_eq!(created.delivery_id, delivery_id.into());
+    assert_eq!(created.sender, shipper);
+
+    client.assign_driver(&shipper, &delivery_id, &driver);
+
+    let events = env.events().all();
+    let raw_event = events.events().last().expect("no driver_assigned event");
+    let xdr::ContractEventBody::V0(body) = raw_event.body.clone();
+    let data = Val::try_from_val(&env, &body.data).unwrap();
+    let assigned: DriverAssignedEvent =
+        DriverAssignedEvent::try_from_val(&env, &data).expect("invalid driver_assigned payload");
+    assert_eq!(assigned.delivery_id, delivery_id.into());
+    assert_eq!(assigned.driver, driver);
+}
+
 // Tests for issue #269: delivery_contract secondary-index accessors and identity getter
 
 /// Minimal delivery client with only `init` run — deliberately does NOT

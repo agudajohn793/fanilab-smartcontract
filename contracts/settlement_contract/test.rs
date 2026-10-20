@@ -35,6 +35,33 @@ fn test_set_and_get_driver_preference() {
     );
 }
 
+#[test]
+fn test_set_driver_preference_extends_instance_ttl() {
+    use soroban_sdk::testutils::Deployer as _;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let escrow = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let to_token = Address::generate(&env);
+
+    client.init(&admin, &escrow);
+    env.ledger().with_mut(|ledger| {
+        ledger.sequence_number += shared_types::ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+
+    client.set_driver_preference(&driver, &to_token);
+
+    let instance_ttl = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        instance_ttl >= shared_types::ttl::LEDGER_TTL_THRESHOLD,
+        "set_driver_preference must extend the contract instance TTL (got {instance_ttl})"
+    );
+}
+
 /// Preferences are per driver: setting one must not leak into another's record.
 #[test]
 fn test_driver_preference_is_scoped_per_driver() {

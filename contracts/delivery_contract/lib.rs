@@ -110,7 +110,6 @@ fn index_page(env: &Env, owner: Address, kind: u32, offset: u32, limit: u32) -> 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum DeliveryError {
-    InvalidState = 1,
     InvalidMetadata = 2,
     /// A batch operation (e.g. create_deliveries_batch) exceeded MAX_BATCH_SIZE.
     BatchTooLarge = 3,
@@ -130,7 +129,6 @@ pub enum DeliveryError {
 mod constants {
     pub const MIN_LOCATION_LEN: u32 = 2;
     pub const MAX_LOCATION_LEN: u32 = 256;
-    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
 }
 
 /// Validate whether a status transition is permitted by the delivery state machine.
@@ -186,9 +184,7 @@ fn validate_delivery_metadata(
     if metadata.origin == metadata.destination {
         return Err(DeliveryError::InvalidMetadata);
     }
-    if metadata.cargo_description.weight_grams == 0
-        || metadata.cargo_description.weight_grams > constants::MAX_WEIGHT_GRAMS
-    {
+    if !metadata.cargo_description.has_valid_weight() {
         return Err(DeliveryError::InvalidMetadata);
     }
     Ok(())
