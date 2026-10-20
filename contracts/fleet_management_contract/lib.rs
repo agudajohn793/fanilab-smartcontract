@@ -36,6 +36,7 @@ pub const MAX_SIGNERS_PER_FLEET: u32 = 20;
 /// eligible for confirmation, giving active drivers advance notice before
 /// their future payouts are redirected (Issue #70).
 pub const TREASURY_CHANGE_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60; // 3 days
+pub const PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS: u64 = 3 * 24 * 60 * 60; // 3 days
 
 fn require_escrow_not_paused(env: &Env) {
     let Some(escrow_contract) = env
@@ -152,6 +153,9 @@ pub enum FleetError {
     DriverNotRegistered = 13,
     /// The fleet already holds `MAX_ROSTER_SIZE` active drivers.
     RosterFull = 14,
+    NoPendingContractChange = 15,
+    ContractChangeTimelockNotElapsed = 16,
+    NoPendingOwnerReassignment = 17,
 }
 
 #[contracttype]
@@ -209,6 +213,27 @@ pub enum DataKey {
     FleetRoster(u64, u32),
     /// Persistent key — pending, not-yet-confirmed treasury change for a fleet.
     PendingTreasury(u64),
+    /// Persistent key — pending admin-proposed owner reassignment for a fleet.
+    PendingFleetOwnerReassignment(u64),
+    /// Instance key — pending identity contract address awaiting confirmation.
+    PendingIdentityContract,
+    /// Instance key — pending escrow contract address awaiting confirmation.
+    PendingEscrowContract,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingContractAddress {
+    pub address: Address,
+    pub proposed_by: Address,
+    pub activates_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingFleetOwnerReassignment {
+    pub new_owner: Address,
+    pub admin: Address,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -232,25 +257,63 @@ impl FleetManagementContract {
             .set(&DataKey::FleetCounter, &0u64);
     }
 
-    /// Configure the address of the identity_reputation_contract.  Admin only.
-    /// Once set, `register_fleet` will automatically create an identity profile
-    /// for the fleet owner via a cross-contract call.
+    /// Propose an identity_reputation_contract address. The address takes
+    /// effect only after the three-day review period and a separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_identity_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingIdentityContract,
+            &PendingContractAddress {
+                address: identity_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
-            .set(&DataKey::IdentityContract, &identity_contract);
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "identity_contract_change_proposed"),),
+            (admin, identity_contract, activates_at),
+        );
+    }
+
+    pub fn confirm_identity_contract(env: Env) {
+        let pending: PendingContractAddress = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingIdentityContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FleetError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::IdentityContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingIdentityContract);
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "identity_contract_updated"),),
-            (admin, identity_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_identity_contract(env: Env) -> Option<PendingContractAddress> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingIdentityContract)
     }
 
     /// Return the configured identity_reputation_contract address, if any.
@@ -260,22 +323,63 @@ impl FleetManagementContract {
             .get(&DataKey::IdentityContract)
     }
 
+    /// Propose an escrow contract address. The address takes effect only
+    /// after the three-day review period and a separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, admin: Address, escrow_contract: Address) {
         admin.require_auth();
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingContractAddress {
+                address: escrow_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
-            .set(&DataKey::EscrowContract, &escrow_contract);
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, escrow_contract, activates_at),
+        );
+    }
+
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingContractAddress = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FleetError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FleetError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_updated"),),
-            (admin, escrow_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingContractAddress> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     /// Return the configured escrow_contract address, if any.
@@ -468,25 +572,15 @@ impl FleetManagementContract {
 
     // ── Issue #69 — admin override / recovery ─────────────────────────────────
 
-    /// Reassign the owner of a fleet without the current owner's cooperation.
+    /// Propose an owner reassignment without the current owner's cooperation.
     ///
     /// This is an emergency recovery path for when a fleet owner's key is
-    /// lost or compromised.  Only the contract admin may call this.  The
-    /// function emits a dedicated `fleet_owner_reassigned` event so that the
-    /// change is auditable on-chain and distinguishable from normal owner
-    /// transfers (which do not yet exist).
+    /// lost or compromised. Only the contract admin may propose the change;
+    /// the proposed owner must separately accept with their own authorization,
+    /// preventing a typo from transferring control to an unusable address.
     ///
-    /// Side effects:
-    /// - `profile.owner` is updated to `new_owner`.
-    /// - `profile.signers` is reset to `[new_owner]` with threshold 1, so the
-    ///   new owner has immediate unilateral control.  If the fleet used a
-    ///   multi-sig configuration the admin (or the new owner) can restore it
-    ///   via `configure_signers` after recovery.
-    /// - Any in-progress `PendingTreasury` change proposed by the evicted
-    ///   owner is discarded (Issue #441).  Otherwise, once that timelock
-    ///   expires anyone could call `confirm_fleet_treasury_update` and apply
-    ///   the evicted owner's address as the fleet treasury, hijacking payouts
-    ///   away from the new owner.
+    /// Re-proposing replaces the pending target. The owner, signer set, and
+    /// pending treasury remain unchanged until the target accepts.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn admin_reassign_fleet_owner(env: Env, admin: Address, fleet_id: u64, new_owner: Address) {
         env.storage().instance().extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
@@ -497,11 +591,27 @@ impl FleetManagementContract {
         }
 
         let fleet_key = DataKey::Fleet(fleet_id);
-        let mut profile: FleetProfile = env
+        let _: FleetProfile = env
             .storage()
             .persistent()
             .get(&fleet_key)
             .unwrap_or_else(|| panic_with_error!(&env, FleetError::FleetNotFound));
+        let pending = PendingFleetOwnerReassignment {
+            new_owner: new_owner.clone(),
+            admin: admin.clone(),
+        };
+        let pending_key = DataKey::PendingFleetOwnerReassignment(fleet_id);
+        env.storage().persistent().set(&pending_key, &pending);
+        env.storage().persistent().extend_ttl(
+            &pending_key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.events().publish(
+            (Symbol::new(&env, "fleet_owner_reassignment_proposed"),),
+            (fleet_id, admin, new_owner),
+        );
+    }
 
         if new_owner == profile.treasury {
             panic_with_error!(&env, FleetError::InvalidConfiguration);
@@ -510,9 +620,6 @@ impl FleetManagementContract {
         let old_owner = profile.owner.clone();
 
         profile.owner = new_owner.clone();
-        // Reset signers to the new owner with threshold 1 so they have
-        // immediate unilateral control; the multi-sig config can be
-        // re-established via configure_signers once the situation is resolved.
         let mut new_signers = soroban_sdk::Vec::new(&env);
         new_signers.push_back(new_owner.clone());
         profile.signers = new_signers;
@@ -524,26 +631,33 @@ impl FleetManagementContract {
             ttl::LEDGER_TTL_THRESHOLD,
             ttl::LEDGER_TTL_EXTEND_TO,
         );
+        env.storage().persistent().remove(&pending_key);
 
         // Discard any in-progress treasury change proposed by the evicted
-        // owner.  `confirm_fleet_treasury_update` is permissionless, so leaving
-        // the pending entry in place would let anyone finalize the evicted
-        // owner's proposal once its timelock expires and redirect the fleet's
-        // payouts (Issue #441).
-        let pending_key = DataKey::PendingTreasury(fleet_id);
-        if env.storage().persistent().has(&pending_key) {
-            env.storage().persistent().remove(&pending_key);
+        // owner so it cannot be finalized after ownership changes.
+        let treasury_key = DataKey::PendingTreasury(fleet_id);
+        if env.storage().persistent().has(&treasury_key) {
+            env.storage().persistent().remove(&treasury_key);
         }
 
         env.events().publish(
             (events::fleet_owner_reassigned(&env),),
             FleetOwnerReassignedEvent {
                 fleet_id,
-                admin,
+                admin: pending.admin,
                 old_owner,
                 new_owner,
             },
         );
+    }
+
+    pub fn get_pending_fleet_owner_reassignment(
+        env: Env,
+        fleet_id: u64,
+    ) -> Option<PendingFleetOwnerReassignment> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PendingFleetOwnerReassignment(fleet_id))
     }
 
     /// Force-update a fleet's treasury address without the fleet owner's
@@ -1260,6 +1374,16 @@ impl FleetManagementContract {
         // it would exceed Soroban's deserialization budget and brick the fleet.
         if signers.len() > MAX_SIGNERS_PER_FLEET {
             panic_with_error!(&env, FleetError::InvalidConfiguration);
+        }
+
+        let mut unique_signers = soroban_sdk::Vec::new(&env);
+        for i in 0..signers.len() {
+            if let Some(signer) = signers.get(i) {
+                if unique_signers.contains(&signer) {
+                    panic_with_error!(&env, FleetError::InvalidConfiguration);
+                }
+                unique_signers.push_back(signer);
+            }
         }
 
         if threshold == 0 || threshold > signers.len() {

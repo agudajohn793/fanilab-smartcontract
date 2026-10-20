@@ -43,6 +43,10 @@ export class IdentityReputationClient {
     await this.invoker.call('set_delivery_contract', [address(params.admin), address(params.deliveryContract)], options);
   }
 
+  async confirmDeliveryContract(options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('confirm_delivery_contract', [], options);
+  }
+
   async setDisputeContract(params: IdentityReputationTypes.SetDisputeContractParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('set_dispute_contract', [address(params.admin), address(params.disputeContract)], options);
   }

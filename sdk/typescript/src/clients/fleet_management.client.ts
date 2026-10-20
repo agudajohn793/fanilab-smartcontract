@@ -29,6 +29,10 @@ export class FleetManagementClient {
     await this.invoker.call('set_identity_contract', [address(params.admin), address(params.identityContract)], options);
   }
 
+  async confirmIdentityContract(options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('confirm_identity_contract', [], options);
+  }
+
   /**
    * Return the configured identity_reputation_contract address, if any.
    * Returns `null` when no identity contract has been wired to this fleet contract yet.
@@ -41,6 +45,10 @@ export class FleetManagementClient {
 
   async setEscrowContract(params: FleetManagementTypes.SetEscrowContractParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('set_escrow_contract', [address(params.admin), address(params.escrowContract)], options);
+  }
+
+  async confirmEscrowContract(options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('confirm_escrow_contract', [], options);
   }
 
   /**
@@ -71,6 +79,10 @@ export class FleetManagementClient {
 
   async adminReassignFleetOwner(params: FleetManagementTypes.AdminReassignFleetOwnerParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('admin_reassign_fleet_owner', [address(params.admin), u64(params.fleetId), address(params.newOwner)], options);
+  }
+
+  async acceptFleetOwnerReassignment(fleetId: bigint, newOwner: string, options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('accept_fleet_owner_reassignment', [address(newOwner), u64(fleetId)], options);
   }
 
   async adminForceUpdateTreasury(params: FleetManagementTypes.AdminForceUpdateTreasuryParams, options?: ContractInvokeOptions): Promise<void> {

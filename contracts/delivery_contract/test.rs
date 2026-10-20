@@ -2709,6 +2709,12 @@ fn test_set_escrow_contract_updates_peer_address() {
 
     client.set_escrow_contract(&shipper, &new_escrow);
 
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+
+    client.confirm_escrow_contract();
+
     assert_eq!(client.get_escrow_contract(), new_escrow);
 }
 
@@ -2746,6 +2752,10 @@ fn test_set_escrow_contract_requires_admin_auth() {
 
     let new_escrow = env.register(MockEscrowContract, ());
     client.set_escrow_contract(&admin, &new_escrow);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_escrow_contract();
 }
 
 /// A delivery created after the repoint uses the new escrow contract for its
@@ -2757,6 +2767,10 @@ fn test_set_escrow_contract_affects_later_deliveries() {
 
     let new_escrow_id = env.register(MockEscrowContract, ());
     client.set_escrow_contract(&shipper, &new_escrow_id);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_escrow_contract();
 
     let metadata = get_test_metadata(&env, 1);
     let delivery_id = client.create_delivery(&shipper, &recipient, &metadata);

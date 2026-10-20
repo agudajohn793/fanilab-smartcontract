@@ -517,8 +517,7 @@ pub struct FleetReactivatedEvent {
     pub caller: Address,
 }
 
-/// Emitted by `admin_reassign_fleet_owner` — admin-initiated ownership
-/// transfer when the original owner key is lost or compromised.
+/// Emitted when the target accepts an admin-proposed owner reassignment.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FleetOwnerReassignedEvent {

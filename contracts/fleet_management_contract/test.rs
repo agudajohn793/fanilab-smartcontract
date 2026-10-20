@@ -38,6 +38,12 @@ fn no_co_signers(env: &Env) -> soroban_sdk::Vec<Address> {
     soroban_sdk::Vec::new(env)
 }
 
+fn advance_peer_contract_change_timelock(env: &Env) {
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+}
+
 fn setup_test() -> (Env, FleetManagementContractClient<'static>, Address) {
     let env = Env::default();
     env.mock_all_auths();
@@ -170,6 +176,22 @@ fn test_admin_reassign_fleet_owner_resets_signers() {
     client.configure_signers(&owner, &fleet_id, &signers, &2u32, &soroban_sdk::Vec::new(&env));
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    assert_eq!(
+        client
+            .get_pending_fleet_owner_reassignment(&fleet_id)
+            .unwrap()
+            .new_owner,
+        new_owner
+    );
+    let attacker = Address::generate(&env);
+    let wrong_acceptor = client.try_accept_fleet_owner_reassignment(&attacker, &fleet_id);
+    match wrong_acceptor {
+        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
+        _ => panic!("Expected only the proposed owner to accept reassignment"),
+    }
+    assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     let profile = client.get_fleet(&fleet_id);
     assert_eq!(profile.owner, new_owner);
@@ -193,6 +215,7 @@ fn test_admin_reassign_fleet_owner_requires_admin() {
     }
 
     assert_eq!(client.get_fleet(&fleet_id).owner, owner);
+    assert_eq!(client.get_pending_fleet_owner_reassignment(&fleet_id), None);
 }
 
 #[test]
@@ -230,6 +253,11 @@ fn test_admin_reassign_fleet_owner_clears_pending_treasury_change() {
     );
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    assert_eq!(
+        client.get_pending_treasury_update(&fleet_id).unwrap().treasury,
+        malicious_treasury
+    );
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     // The in-flight proposal is gone, so it can never be confirmed later.
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
@@ -254,6 +282,7 @@ fn test_admin_reassign_fleet_owner_without_pending_treasury_change() {
     let new_owner = Address::generate(&env);
 
     client.admin_reassign_fleet_owner(&admin, &fleet_id, &new_owner);
+    client.accept_fleet_owner_reassignment(&new_owner, &fleet_id);
 
     assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
     assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
@@ -1072,6 +1101,16 @@ fn test_set_identity_contract_admin_success() {
 
     let identity_id = env.register(IdentityReputationContract, ());
     client.set_identity_contract(&admin, &identity_id);
+    assert_eq!(client.get_identity_contract(), None);
+    assert_eq!(
+        client.get_pending_identity_contract().unwrap().address,
+        identity_id
+    );
+
+    let too_early = client.try_confirm_identity_contract();
+    assert!(too_early.is_err());
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let stored: Address = env.as_contract(&client.address, || {
         env.storage()
@@ -1103,6 +1142,8 @@ fn test_register_fleet_twice_same_owner_with_identity_contract() {
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
     client.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     let treasury_a = Address::generate(&env);
@@ -1128,6 +1169,8 @@ fn test_register_fleet_for_existing_driver_succeeds() {
         identity_reputation_contract::IdentityReputationContractClient::new(&env, &identity_id);
 
     client.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    client.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     identity_client.register_driver(&owner);
@@ -1505,6 +1548,35 @@ fn test_configure_signers_rejects_invalid_threshold() {
 }
 
 #[test]
+fn test_configure_signers_rejects_duplicate_addresses() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let signer_b = Address::generate(&env);
+
+    let mut duplicate_signers = soroban_sdk::Vec::new(&env);
+    duplicate_signers.push_back(owner.clone());
+    duplicate_signers.push_back(owner.clone());
+    duplicate_signers.push_back(signer_b);
+
+    let result = client.try_configure_signers(
+        &owner,
+        &fleet_id,
+        &duplicate_signers,
+        &3u32,
+        &soroban_sdk::Vec::new(&env),
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration for duplicate signers"),
+    }
+
+    let (signers, threshold) = client.get_fleet_signers(&fleet_id);
+    assert_eq!(signers.len(), 1);
+    assert_eq!(signers.get(0).unwrap(), owner);
+    assert_eq!(threshold, 1);
+}
+
+#[test]
 fn test_configure_signers_rejects_zero_threshold() {
     let (env, client, _admin) = setup_test();
 
@@ -1760,6 +1832,8 @@ fn test_full_protocol_happy_path() {
     let fleet = FleetManagementContractClient::new(&env, &fleet_id);
     fleet.init(&admin);
     fleet.set_escrow_contract(&admin, &escrow_id);
+    advance_peer_contract_change_timelock(&env);
+    fleet.confirm_escrow_contract();
 
     let delivery_id = env.register(DeliveryContract, ());
     let delivery = delivery_contract::DeliveryContractClient::new(&env, &delivery_id);
@@ -1772,6 +1846,8 @@ fn test_full_protocol_happy_path() {
     identity.init(&admin, &delivery_id, &dispute_id);
     delivery.set_identity_reputation_contract(&admin, &identity_id);
     fleet.set_identity_contract(&admin, &identity_id);
+    advance_peer_contract_change_timelock(&env);
+    fleet.confirm_identity_contract();
 
     let owner = Address::generate(&env);
     let treasury = Address::generate(&env);
@@ -2069,6 +2145,8 @@ fn setup_with_identity(
 ) -> identity_reputation_contract::IdentityReputationContractClient<'static> {
     let identity_id = env.register(IdentityReputationContract, ());
     client.set_identity_contract(admin, &identity_id);
+    advance_peer_contract_change_timelock(env);
+    client.confirm_identity_contract();
     identity_reputation_contract::IdentityReputationContractClient::new(env, &identity_id)
 }
 

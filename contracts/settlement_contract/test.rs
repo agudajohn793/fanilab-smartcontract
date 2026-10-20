@@ -139,6 +139,10 @@ fn test_set_and_get_escrow_contract() {
     // Update to a new escrow address.
     let newer_escrow = Address::generate(&env);
     client.set_escrow_contract(&admin, &newer_escrow);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_escrow_contract();
     assert_eq!(client.get_escrow_contract(), newer_escrow);
 }
 

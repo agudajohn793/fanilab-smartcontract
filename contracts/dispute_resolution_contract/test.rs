@@ -2172,6 +2172,10 @@ fn test_set_delivery_contract_by_admin() {
 
     let new_delivery = Address::generate(&env);
     dispute_client.set_delivery_contract(&admin, &new_delivery);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    dispute_client.confirm_delivery_contract();
 
     assert_eq!(dispute_client.get_delivery_contract(), new_delivery);
 }
@@ -2199,6 +2203,10 @@ fn test_set_escrow_contract_by_admin() {
 
     let new_escrow = Address::generate(&env);
     dispute_client.set_escrow_contract(&admin, &new_escrow);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    dispute_client.confirm_escrow_contract();
 
     assert_eq!(dispute_client.get_escrow_contract(), new_escrow);
 }
@@ -2228,10 +2236,18 @@ fn test_peer_setters_accept_added_admin() {
 
     let new_delivery = Address::generate(&env);
     dispute_client.set_delivery_contract(&second_admin, &new_delivery);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    dispute_client.confirm_delivery_contract();
     assert_eq!(dispute_client.get_delivery_contract(), new_delivery);
 
     let new_escrow = Address::generate(&env);
     dispute_client.set_escrow_contract(&second_admin, &new_escrow);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    dispute_client.confirm_escrow_contract();
     assert_eq!(dispute_client.get_escrow_contract(), new_escrow);
 }
 
@@ -2252,11 +2268,23 @@ fn test_peer_setters_publish_events() {
     dispute_client.init(&admin, &delivery_id, &escrow_id, &86400, &604800);
 
     dispute_client.set_delivery_contract(&admin, &Address::generate(&env));
+
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+
+    dispute_client.confirm_delivery_contract();
     let (topics, _) = last_event(&env);
     let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "delivery_contract_set"));
 
     dispute_client.set_escrow_contract(&admin, &Address::generate(&env));
+
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+
+    dispute_client.confirm_escrow_contract();
     let (topics, _) = last_event(&env);
     let topic0: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
     assert_eq!(topic0, Symbol::new(&env, "escrow_contract_set"));

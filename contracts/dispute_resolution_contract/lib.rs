@@ -3,7 +3,7 @@
 use shared_types::{
     events, ttl, DeliveryId, DeliveryStatus, DisputeRaisedEvent, DisputeResolvedPayoutEvent,
     DisputeResolvedRefundEvent, DisputeResolvedSplitEvent, EscrowRecord, EscrowStatus,
-    FaniLabError,
+    FaniLabError, PendingPeerContractChange,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
@@ -134,6 +134,8 @@ pub enum DataKey {
     AdminList,
     DeliveryContract,
     EscrowContract,
+    PendingDeliveryContract,
+    PendingEscrowContract,
     IdentityReputationContract,
     DisputeTimeLimit,
     DisputeResolutionLimit,
@@ -373,7 +375,8 @@ impl DisputeResolutionContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
-    /// Repoint the delivery contract this contract escalates to (Issue #438).
+    /// Propose a new delivery contract address. It takes effect after a
+    /// three-day review period and separate confirmation (Issue #438).
     ///
     /// Without this setter the address supplied to `init` was frozen for the
     /// lifetime of the deployment: any upgrade of the delivery contract forced
@@ -386,6 +389,18 @@ impl DisputeResolutionContract {
         if !Self::is_admin(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingDeliveryContract,
+            &PendingPeerContractChange {
+                address: delivery_contract.clone(),
+                proposed_by: caller.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
@@ -393,22 +408,63 @@ impl DisputeResolutionContract {
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382 precedent: emit an event so off-chain indexers can track when
-        // this contract pointer is updated by an admin.
+        // this contract pointer is proposed by an admin.
         env.events().publish(
-            (Symbol::new(&env, "delivery_contract_set"),),
-            (caller, delivery_contract),
+            (Symbol::new(&env, "delivery_contract_change_proposed"),),
+            (caller, delivery_contract, activates_at),
         );
     }
 
-    /// Repoint the escrow contract this contract freezes funds in and resolves
-    /// disputes against. Admin-only, for the same reasons and with the same
-    /// rationale as `set_delivery_contract` (Issue #438).
+    pub fn confirm_delivery_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FaniLabError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingDeliveryContract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "delivery_contract_set"),),
+            (pending.proposed_by, pending.address),
+        );
+    }
+
+    pub fn get_pending_delivery_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+    }
+
+    /// Propose an escrow contract address. The address takes effect after a
+    /// three-day review period and separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, caller: Address, escrow_contract: Address) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: escrow_contract.clone(),
+                proposed_by: caller.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
@@ -417,8 +473,14 @@ impl DisputeResolutionContract {
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_set"),),
-            (caller, escrow_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)

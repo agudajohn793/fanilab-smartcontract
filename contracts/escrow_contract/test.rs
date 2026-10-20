@@ -2141,6 +2141,10 @@ fn test_release_holdback_escrow_rejects_reentrancy_via_fleet_get_payout_address(
     );
     let delivery_contract = Address::generate(&env);
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &901u64);
 
     let fleet = env.register(MaliciousFleetContract, ());
@@ -2456,6 +2460,10 @@ fn test_release_holdback_escrow_applies_volume_discount() {
 
     client.create_escrow(&sender, &recipient, &driver, &514u64, &token, &1000, &None);
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &514u64);
     client.release_holdback_escrow(&recipient, &514u64);
 
@@ -3802,6 +3810,10 @@ fn setup_confirmed_delivery_in_holdback(
 
     escrow_client.init(&admin, &token, &0);
     escrow_client.set_delivery_contract(&admin, &delivery_contract_id);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    escrow_client.confirm_delivery_contract();
     delivery_client.init(&admin, &escrow_contract_id);
     // Only delivery_contract needs authority to call increase_reputation here;
     // the dispute_resolution_contract slot is unused by this flow.
@@ -3882,6 +3894,10 @@ fn setup_holdback_escrow(
         &None,
     );
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &delivery_id);
 
     (env, contract_id, token, admin, sender, recipient, driver)
@@ -4031,6 +4047,10 @@ fn test_release_holdback_escrow_still_pays_driver_after_fix() {
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &923u64, &token, &1000, &None);
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &923u64);
 
     client.release_holdback_escrow(&recipient, &923u64);
@@ -4532,6 +4552,10 @@ fn setup_wired_protocol(
     // Issue #466: `mark_holdback_escrow` is restricted to the configured
     // `delivery_contract`, so the escrow's peer must be wired as well.
     escrow_client.set_delivery_contract(&admin, &delivery_addr);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    escrow_client.confirm_delivery_contract();
     delivery_client.init(&admin, &escrow_addr);
     // Issue #444: delivery::raise_dispute only accepts the dispute contract.
     delivery_client.set_dispute_resolution_contract(&admin, &dispute_addr);
@@ -5255,6 +5279,10 @@ fn test_escrow_released_event_shape_matches_across_emitters() {
         &None,
     );
     client_b.set_delivery_contract(&admin_b, &delivery_contract_b);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client_b.confirm_delivery_contract();
     client_b.mark_holdback_escrow(&delivery_contract_b, &801u64);
     client_b.release_holdback_escrow(&recipient_b, &801u64);
 
@@ -5298,6 +5326,10 @@ fn test_release_holdback_escrow_event_carries_correct_fields() {
         &None,
     );
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &DELIVERY_ID);
     client.release_holdback_escrow(&recipient, &DELIVERY_ID);
 
@@ -5672,6 +5704,10 @@ fn test_freeze_funds_holdback_escrow_succeeds() {
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &2945u64, &token, &1000, &None);
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &2945u64);
     assert_eq!(client.get_escrow(&2945u64).status, EscrowStatus::Holdback);
 
@@ -5729,6 +5765,10 @@ fn test_create_escrow_rejects_nonexistent_delivery_when_configured() {
     client.init(&admin, &token, &0);
     // Point escrow → delivery contract: verification is now active
     client.set_delivery_contract(&admin, &delivery_id_raw);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     // DO NOT create a delivery record: delivery_id 9990 does not exist
     delivery_contract::DeliveryContractClient::new(&env, &delivery_id_raw).init(&admin, &escrow_id);
     mint(&env, &token, &sender, 1000);
@@ -5763,6 +5803,10 @@ fn test_create_escrow_rejects_mismatched_recipient() {
     client.init(&admin, &token, &0);
     delivery_client.init(&admin, &escrow_id);
     client.set_delivery_contract(&admin, &delivery_id_raw);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
 
     // Create a delivery with real_recipient
     let did =
@@ -5814,6 +5858,10 @@ fn test_create_escrow_rejects_mismatched_driver_when_assigned() {
     identity_client.init(&admin, &delivery_id_raw, &Address::generate(&env));
     delivery_client.set_identity_reputation_contract(&admin, &identity_id);
     client.set_delivery_contract(&admin, &delivery_id_raw);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
 
     identity_client.register_driver(&real_driver);
     let did =
@@ -5860,6 +5908,10 @@ fn test_create_escrow_allows_unassigned_driver() {
     client.init(&admin, &token, &0);
     delivery_client.init(&admin, &escrow_id);
     client.set_delivery_contract(&admin, &delivery_id_raw);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
 
     // Create delivery with no driver assigned yet
     let did =
@@ -5958,6 +6010,10 @@ fn test_create_escrow_happy_path_with_delivery_contract_configured() {
     identity_client.init(&admin, &delivery_id_raw, &Address::generate(&env));
     delivery_client.set_identity_reputation_contract(&admin, &identity_id);
     client.set_delivery_contract(&admin, &delivery_id_raw);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
 
     identity_client.register_driver(&driver);
     let did =
@@ -6806,6 +6862,10 @@ fn test_recipient_cannot_call_mark_holdback_escrow_directly() {
     mint(&env, &token, &sender, 1000);
     client.create_escrow(&sender, &recipient, &driver, &10001u64, &token, &1000, &None);
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
 
     // Calling mark_holdback_escrow directly as recipient must fail with Unauthorized
     let res = client.try_mark_holdback_escrow(&recipient, &10001u64);
@@ -6941,6 +7001,10 @@ fn test_sender_volume_ttl_extended_on_release_holdback_escrow() {
         &sender, &recipient, &driver, &10301u64, &token, &1000, &None,
     );
     client.set_delivery_contract(&admin, &delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.mark_holdback_escrow(&delivery_contract, &10301u64);
     client.release_holdback_escrow(&recipient, &10301u64);
 

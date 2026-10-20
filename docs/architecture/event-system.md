@@ -109,7 +109,7 @@ The live contracts currently still emit a set of inline topics in addition to th
 | `dispute_split_penalty_updated` | `dispute_resolution_contract::set_dispute_split_penalty` | `(caller, old_penalty, penalty)` |
 | `dispute_time_limit_updated` | `dispute_resolution_contract::update_dispute_time_limit` | `(caller, old_limit, new_limit)` |
 | `fleet_deactivated` | `fleet_management_contract::deactivate_fleet` | `FleetDeactivatedEvent { fleet_id, caller }` |
-| `fleet_owner_reassigned` | `fleet_management_contract::admin_reassign_fleet_owner` | `FleetOwnerReassignedEvent { fleet_id, admin, old_owner, new_owner }` |
+| `fleet_owner_reassigned` | `fleet_management_contract::accept_fleet_owner_reassignment` | `FleetOwnerReassignedEvent { fleet_id, admin, old_owner, new_owner }` |
 | `fleet_treasury_force_updated` | `fleet_management_contract::force_update_fleet_treasury` | `FleetTreasuryForceUpdatedEvent { fleet_id, admin, old_treasury, new_treasury }` |
 
 ---

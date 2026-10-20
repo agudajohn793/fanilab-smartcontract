@@ -2,7 +2,7 @@
 
 use shared_types::{
     escrow_key, events, is_admin, ttl, DeliveryRecord, DeliveryStatus, EscrowRecord, EscrowStatus,
-    FaniLabError, ProtocolConfig, StorageKey,
+    FaniLabError, PendingPeerContractChange, ProtocolConfig, StorageKey,
 };
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, token, Address, Env,
@@ -537,6 +537,7 @@ enum DataKey {
     /// When absent the check is skipped so existing deployments and tests that
     /// do not wire up the delivery contract continue to work unchanged.
     DeliveryContract,
+    PendingDeliveryContract,
     /// Track total locked value per token
     TotalLocked(Address),
     /// Track sender volume (number of completed deliveries)
@@ -944,7 +945,7 @@ impl EscrowContract {
             .get(&DataKey::IdentityReputationContract)
     }
 
-    /// Configure the delivery contract address used by `create_escrow` and
+    /// Propose the delivery contract address used by `create_escrow` and
     /// `create_escrows_batch` to cross-verify that a delivery record exists and
     /// that the supplied recipient/driver match before locking funds (Issue #295).
     ///
@@ -954,14 +955,57 @@ impl EscrowContract {
     /// the optional integration pattern used by the fleet-management and
     /// settlement integrations.
     ///
-    /// Only an admin may call this, mirroring every other peer-contract setter.
+    /// Only an admin may propose this change. It takes effect after a
+    /// three-day review period and separate confirmation.
     pub fn set_delivery_contract(env: Env, admin: Address, delivery_contract: Address) {
         admin.require_auth();
         require_admin(&env, &admin);
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingDeliveryContract,
+            &PendingPeerContractChange {
+                address: delivery_contract.clone(),
+                proposed_by: admin,
+                activates_at,
+            },
+        );
+        extend_instance_ttl(&env);
+        env.events().publish(
+            (Symbol::new(&env, "delivery_contract_change_proposed"),),
+            (delivery_contract, activates_at),
+        );
+    }
+
+    #[allow(deprecated)]
+    pub fn confirm_delivery_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, EscrowError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, EscrowError::ContractChangeTimelockNotElapsed);
+        }
         env.storage()
             .instance()
-            .set(&DataKey::DeliveryContract, &delivery_contract);
+            .set(&DataKey::DeliveryContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingDeliveryContract);
         extend_instance_ttl(&env);
+        env.events().publish(
+            (Symbol::new(&env, "delivery_contract_updated"),),
+            (pending.proposed_by, pending.address),
+        );
+    }
+
+    pub fn get_pending_delivery_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
     }
 
     /// Return the configured delivery contract address, if any.

@@ -113,15 +113,19 @@ describe('FleetManagementClient.getIdentityContract (Issue #486)', () => {
   it('set+get round-trip for both escrow and identity contracts', async () => {
     const call = mockInvoker({
       set_escrow_contract: [nativeToScVal(null)],
+      confirm_escrow_contract: [nativeToScVal(null)],
       get_escrow_contract: [nativeToScVal(ESCROW_ADDR, { type: 'address' })],
       set_identity_contract: [nativeToScVal(null)],
+      confirm_identity_contract: [nativeToScVal(null)],
       get_identity_contract: [nativeToScVal(IDENTITY_ADDR, { type: 'address' })],
     });
 
     const fleetClient = client();
     await fleetClient.setEscrowContract({ admin: ADMIN, escrowContract: ESCROW_ADDR });
+    await fleetClient.confirmEscrowContract();
     const readEscrow = await fleetClient.getEscrowContract();
     await fleetClient.setIdentityContract({ admin: ADMIN, identityContract: IDENTITY_ADDR });
+    await fleetClient.confirmIdentityContract();
     const readIdentity = await fleetClient.getIdentityContract();
 
     expect(readEscrow).toBe(ESCROW_ADDR);
@@ -130,8 +134,10 @@ describe('FleetManagementClient.getIdentityContract (Issue #486)', () => {
     const fns = call.mock.calls.map((c) => c[0]);
     expect(fns).toEqual([
       'set_escrow_contract',
+      'confirm_escrow_contract',
       'get_escrow_contract',
       'set_identity_contract',
+      'confirm_identity_contract',
       'get_identity_contract',
     ]);
   });
