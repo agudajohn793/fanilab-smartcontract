@@ -4,7 +4,7 @@ use super::*;
 use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus, FaniLabError};
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Deployer as _, Events, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, String, Symbol, TryFromVal, Val,
 };
@@ -354,6 +354,36 @@ fn test_remove_admin_allowed_when_multiple_admins_remain() {
     dispute_client.remove_admin(&admin, &admin);
     assert!(!dispute_client.is_admin(&admin));
     assert!(dispute_client.is_admin(&second_admin));
+}
+
+/// Removing an address that is not on the roster must be rejected: the
+/// filter would remove nothing, rewrite the unchanged list, and publish a
+/// misleading `admin_removed` event for a removal that never happened.
+#[test]
+fn test_remove_nonexistent_admin_rejected() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+
+    let second_admin = Address::generate(&env);
+    dispute_client.add_admin(&admin, &second_admin);
+    assert_eq!(dispute_client.list_admins().len(), 2);
+
+    let stranger = Address::generate(&env);
+    let result = dispute_client.try_remove_admin(&admin, &stranger);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        other => panic!("expected InvalidState when removing a non-admin, got {other:?}"),
+    }
+
+    // The roster and flags are untouched...
+    assert_eq!(dispute_client.list_admins().len(), 2);
+    assert!(dispute_client.is_admin(&admin));
+    assert!(dispute_client.is_admin(&second_admin));
+    assert!(!dispute_client.is_admin(&stranger));
+
+    // ...and no `admin_removed` event was published: the harness only
+    // surfaces events from the most recent invocation (the failed
+    // `try_remove_admin`), whose events were rolled back with it.
+    assert_eq!(env.events().all().events().len(), 0);
 }
 
 #[test]
@@ -2232,6 +2262,51 @@ fn test_peer_setters_publish_events() {
     assert_eq!(topic0, Symbol::new(&env, "escrow_contract_set"));
 }
 
+#[test]
+fn test_peer_pointer_setters_extend_instance_ttl() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let dispute_id = dispute_client.address.clone();
+
+    for setter in 0..3 {
+        env.ledger().with_mut(|ledger| {
+            ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+        });
+        let new_address = Address::generate(&env);
+        match setter {
+            0 => dispute_client.set_delivery_contract(&admin, &new_address),
+            1 => dispute_client.set_escrow_contract(&admin, &new_address),
+            _ => dispute_client.set_identity_reputation_contract(&admin, &new_address),
+        }
+        let remaining_ttl = env.deployer().get_contract_instance_ttl(&dispute_id);
+        assert!(
+            remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+            "peer pointer setter {setter} must extend instance TTL (got {remaining_ttl})"
+        );
+    }
+}
+
+#[test]
+fn test_reputation_config_setters_extend_instance_ttl() {
+    let (env, admin, _, _, _, _, _, dispute_client) = setup_test();
+    let dispute_id = dispute_client.address.clone();
+
+    for setter in 0..3 {
+        env.ledger().with_mut(|ledger| {
+            ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+        });
+        match setter {
+            0 => dispute_client.set_dispute_reputation_penalty(&admin, &11),
+            1 => dispute_client.set_dispute_reputation_reward(&admin, &6),
+            _ => dispute_client.set_dispute_split_penalty(&admin, &6),
+        }
+        let remaining_ttl = env.deployer().get_contract_instance_ttl(&dispute_id);
+        assert!(
+            remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+            "reputation config setter {setter} must extend instance TTL (got {remaining_ttl})"
+        );
+    }
+}
+
 /// Issue #447: Integration tests proving delivery record correctly reaches
 /// terminal `DeliveryStatus::Resolved` across all three resolution paths.
 #[test]
@@ -2312,3 +2387,150 @@ fn test_dispute_resolution_transitions_delivery_to_resolved_across_all_paths() {
     assert_eq!(delivery3.status, DeliveryStatus::Resolved);
 }
 
+// ── Issue #312 — has_dispute / get_dispute_count query coverage ──────────────
+
+/// Helper: create the mock delivery + escrow records `raise_dispute` requires
+/// (Active delivery, Locked escrow) and raise the dispute for `delivery_id`.
+fn raise_mock_dispute(
+    sender: &Address,
+    recipient: &Address,
+    driver: &Address,
+    delivery_contract: &Address,
+    escrow_contract: &Address,
+    dispute_client: &DisputeResolutionContractClient,
+    delivery_id: DeliveryId,
+) {
+    let env = &dispute_client.env;
+    let mut delivery_record = create_mock_delivery_record(
+        env,
+        delivery_id,
+        sender.clone(),
+        recipient.clone(),
+        DeliveryStatus::Active,
+        None,
+    );
+    // `resolve_dispute_refund_sender` requires an assigned driver
+    // (ProviderNotFound otherwise), so attach one up front.
+    delivery_record.driver = Some(driver.clone());
+    set_mock_delivery(env, delivery_contract, delivery_id, &delivery_record);
+    let escrow_record = create_mock_escrow_record(
+        sender.clone(),
+        recipient.clone(),
+        driver.clone(),
+        Address::generate(env),
+        shared_types::EscrowStatus::Locked,
+    );
+    set_mock_escrow(env, escrow_contract, u64::from(delivery_id), &escrow_record);
+    dispute_client.raise_dispute(sender, &delivery_id);
+}
+
+/// Issue #312: `has_dispute` must report existence without panicking — false
+/// for an unknown ID, true once raised, and still true after resolution
+/// (presence, not openness).
+#[test]
+fn test_has_dispute_reflects_dispute_existence() {
+    let (_env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    // Unknown delivery: returns false without panicking.
+    assert!(!dispute_client.has_dispute(&did(1)));
+
+    raise_mock_dispute(
+        &sender,
+        &recipient,
+        &driver,
+        &delivery_id,
+        &escrow_id,
+        &dispute_client,
+        did(1),
+    );
+    assert!(dispute_client.has_dispute(&did(1)));
+    // A different, never-raised ID still reports false.
+    assert!(!dispute_client.has_dispute(&did(2)));
+
+    // Existence is independent of status: a resolved dispute still exists.
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(1));
+    assert!(dispute_client.has_dispute(&did(1)));
+}
+
+/// Issue #312: `get_dispute_count` starts at zero and increments once per
+/// raised dispute; resolving a dispute does not decrement the count (it is
+/// monotonically increasing).
+#[test]
+fn test_get_dispute_count_increments_for_each_raised_dispute() {
+    let (_env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    assert_eq!(dispute_client.get_dispute_count(), 0);
+
+    raise_mock_dispute(
+        &sender,
+        &recipient,
+        &driver,
+        &delivery_id,
+        &escrow_id,
+        &dispute_client,
+        did(1),
+    );
+    assert_eq!(dispute_client.get_dispute_count(), 1);
+
+    raise_mock_dispute(
+        &sender,
+        &recipient,
+        &driver,
+        &delivery_id,
+        &escrow_id,
+        &dispute_client,
+        did(2),
+    );
+    assert_eq!(dispute_client.get_dispute_count(), 2);
+    assert!(dispute_client.has_dispute(&did(1)));
+    assert!(dispute_client.has_dispute(&did(2)));
+
+    // Resolution does not shrink the "ever recorded" counter.
+    dispute_client.resolve_dispute_refund_sender(&admin, &did(1));
+    assert_eq!(dispute_client.get_dispute_count(), 2);
+}
+
+// ── Issue #473 — sender_share_bps endpoint validation ────────────────────────
+
+/// A split must be a genuine split: 0% duplicates `resolve_dispute_pay_driver`
+/// and 100% duplicates `resolve_dispute_refund_sender`, yet routing either
+/// through split would still apply the split reputation penalty to the driver.
+/// Both endpoints (and anything above 10000) must be rejected with
+/// `InvalidState` before any state mutation, while a genuine split still works.
+#[test]
+fn test_split_funds_rejects_sender_share_endpoints() {
+    let (_env, admin, sender, recipient, driver, delivery_id, escrow_id, dispute_client) =
+        setup_test();
+
+    raise_mock_dispute(
+        &sender,
+        &recipient,
+        &driver,
+        &delivery_id,
+        &escrow_id,
+        &dispute_client,
+        did(1),
+    );
+
+    for &bps in &[0u32, 10000, 10001] {
+        let result = dispute_client.try_resolve_dispute_split_funds(&admin, &did(1), &bps);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+            other => panic!("expected InvalidState for sender_share_bps={bps}, got {other:?}"),
+        }
+        // Rejected before any state mutation: the dispute is still Open.
+        assert_eq!(
+            dispute_client.get_dispute(&did(1)).status,
+            DisputeStatus::Open
+        );
+    }
+
+    // A genuine split within the exclusive range still succeeds.
+    dispute_client.resolve_dispute_split_funds(&admin, &did(1), &6000);
+    assert_eq!(
+        dispute_client.get_dispute(&did(1)).status,
+        DisputeStatus::Split
+    );
+}

@@ -157,8 +157,21 @@ export const ErrorCodes = {
 export interface ContractInvokeOptions {
   networkPassphrase?: string;
   serverUrl?: string;
+  /** RPC request timeout in milliseconds. */
   timeout?: number;
   timeoutSeconds?: number;
+  /** Initial delay between transaction status polls, in milliseconds. */
+  pollingIntervalMs?: number;
+  /** Maximum delay between transaction status polls, in milliseconds. */
+  pollingMaxIntervalMs?: number;
+  /** Maximum time to wait for a submitted transaction, in milliseconds. */
+  pollingTimeoutMs?: number;
+  /** Abort an in-progress transaction status wait. */
+  signal?: AbortSignal;
+  /** Extend persistent storage entries whose remaining TTL is at or below this ledger count. */
+  ttlThresholdLedgers?: number;
+  /** Minimum TTL, in ledgers, for entries selected for extension. */
+  ttlExtendToLedgers?: number;
   fee?: string;
   sourceAccount?: string;
   signer?: Keypair;

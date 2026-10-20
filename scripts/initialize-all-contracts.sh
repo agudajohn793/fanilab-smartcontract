@@ -49,39 +49,150 @@ if ! stellar keys address "$DEPLOYER_IDENTITY" &> /dev/null; then
 fi
 
 # Parse contract IDs from JSON
-ESCROW_ID=$(grep -o '"escrow_contract": "[^"]*' "$CONTRACT_IDS_FILE" | grep -o '[^"]*$')
-DELIVERY_ID=$(grep -o '"delivery_contract": "[^"]*' "$CONTRACT_IDS_FILE" | grep -o '[^"]*$')
+get_contract_id() {
+    grep -o "\"$1\": *\"[^\"]*\"" "$CONTRACT_IDS_FILE" | grep -o '"[^"]*"$' | tr -d '"'
+}
+
+ESCROW_ID=$(get_contract_id "escrow_contract")
+DELIVERY_ID=$(get_contract_id "delivery_contract")
+DISPUTE_ID=$(get_contract_id "dispute_resolution_contract")
+FLEET_ID=$(get_contract_id "fleet_management_contract")
+IDENTITY_ID=$(get_contract_id "identity_reputation_contract")
+SETTLEMENT_ID=$(get_contract_id "settlement_contract")
+
+for contract in \
+    "escrow_contract:$ESCROW_ID" \
+    "delivery_contract:$DELIVERY_ID" \
+    "dispute_resolution_contract:$DISPUTE_ID" \
+    "fleet_management_contract:$FLEET_ID" \
+    "identity_reputation_contract:$IDENTITY_ID" \
+    "settlement_contract:$SETTLEMENT_ID"; do
+    if [ -z "${contract#*:}" ]; then
+        echo "❌ ${contract%%:*} ID not found in $CONTRACT_IDS_FILE"
+        exit 1
+    fi
+done
+
+if [ -z "$ADMIN_ADDRESS" ] || [ -z "$TOKEN_ADDRESS" ]; then
+    echo "❌ ADMIN_ADDRESS and TOKEN_ADDRESS must be set (in .env or the environment)"
+    exit 1
+fi
+
+invoke_contract() {
+    local contract_id=$1
+    shift
+    stellar contract invoke \
+        --id "$contract_id" \
+        --source "$DEPLOYER_IDENTITY" \
+        --network "$NETWORK" \
+        -- "$@"
+}
+
+DISPUTE_TIME_LIMIT=${DISPUTE_TIME_LIMIT:-86400}
+DISPUTE_RESOLUTION_LIMIT=${DISPUTE_RESOLUTION_LIMIT:-86400}
 
 echo "Escrow Contract: $ESCROW_ID"
 echo "Delivery Contract: $DELIVERY_ID"
+echo "Dispute Resolution Contract: $DISPUTE_ID"
+echo "Fleet Management Contract: $FLEET_ID"
+echo "Identity Reputation Contract: $IDENTITY_ID"
+echo "Settlement Contract: $SETTLEMENT_ID"
 echo ""
 
-# Initialize Escrow Contract
 echo "Initializing Escrow Contract..."
-stellar contract invoke \
-    --id "$ESCROW_ID" \
-    --source "$DEPLOYER_IDENTITY" \
-    --network "$NETWORK" \
-    -- init \
+invoke_contract "$ESCROW_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --token "$TOKEN_ADDRESS" \
-    --platform_fee_bps 250
-
+    --platform_fee_bps "${PLATFORM_FEE_BPS:-250}"
 echo "✓ Escrow initialized"
-echo ""
 
-# Initialize Delivery Contract
 echo "Initializing Delivery Contract..."
-stellar contract invoke \
-    --id "$DELIVERY_ID" \
-    --source "$DEPLOYER_IDENTITY" \
-    --network "$NETWORK" \
-    -- init \
+invoke_contract "$DELIVERY_ID" init \
     --admin "$ADMIN_ADDRESS" \
     --escrow_contract "$ESCROW_ID"
-
 echo "✓ Delivery initialized"
+
+echo "Initializing Dispute Resolution Contract..."
+invoke_contract "$DISPUTE_ID" init \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID" \
+    --escrow_contract "$ESCROW_ID" \
+    --dispute_time_limit "$DISPUTE_TIME_LIMIT" \
+    --dispute_resolution_limit "$DISPUTE_RESOLUTION_LIMIT"
+echo "✓ Dispute resolution initialized"
+
+echo "Initializing Fleet Management Contract..."
+invoke_contract "$FLEET_ID" init \
+    --admin "$ADMIN_ADDRESS"
+echo "✓ Fleet management initialized"
+
+echo "Initializing Identity Reputation Contract..."
+invoke_contract "$IDENTITY_ID" init \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID" \
+    --dispute_contract "$DISPUTE_ID"
+echo "✓ Identity reputation initialized"
+
+echo "Initializing Settlement Contract..."
+invoke_contract "$SETTLEMENT_ID" init \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+echo "✓ Settlement initialized"
 echo ""
 
+echo "Wiring contract integrations..."
+invoke_contract "$DELIVERY_ID" set_escrow_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+invoke_contract "$DELIVERY_ID" set_dispute_resolution_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --dispute_contract "$DISPUTE_ID"
+invoke_contract "$DELIVERY_ID" set_identity_reputation_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --identity_contract "$IDENTITY_ID"
+
+invoke_contract "$DISPUTE_ID" set_delivery_contract \
+    --caller "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID"
+invoke_contract "$DISPUTE_ID" set_escrow_contract \
+    --caller "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+invoke_contract "$DISPUTE_ID" set_identity_reputation_contract \
+    --caller "$ADMIN_ADDRESS" \
+    --reputation_contract "$IDENTITY_ID"
+
+invoke_contract "$FLEET_ID" set_escrow_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --escrow_contract "$ESCROW_ID"
+invoke_contract "$FLEET_ID" set_identity_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --identity_contract "$IDENTITY_ID"
+
+invoke_contract "$IDENTITY_ID" set_delivery_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID"
+invoke_contract "$IDENTITY_ID" set_dispute_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --dispute_contract "$DISPUTE_ID"
+
+invoke_contract "$SETTLEMENT_ID" set_escrow_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --new_escrow "$ESCROW_ID"
+
+invoke_contract "$ESCROW_ID" set_delivery_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --delivery_contract "$DELIVERY_ID"
+invoke_contract "$ESCROW_ID" set_dispute_resolution_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --dispute_contract "$DISPUTE_ID"
+invoke_contract "$ESCROW_ID" set_identity_reputation_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --identity_contract "$IDENTITY_ID"
+invoke_contract "$ESCROW_ID" set_fleet_management_contract \
+    --admin "$ADMIN_ADDRESS" \
+    --fleet_contract "$FLEET_ID"
+
+echo "✓ Contract integrations configured"
+echo ""
 echo "✅ All contracts initialized successfully!"
 exit 0

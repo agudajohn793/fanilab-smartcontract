@@ -65,6 +65,10 @@ export class FleetManagementClient {
     await this.invoker.call('deactivate_fleet', [address(params.caller), u64(params.fleetId)], options);
   }
 
+  async reactivateFleet(params: FleetManagementTypes.ReactivateFleetParams, options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('reactivate_fleet', [address(params.caller), u64(params.fleetId)], options);
+  }
+
   async adminReassignFleetOwner(params: FleetManagementTypes.AdminReassignFleetOwnerParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('admin_reassign_fleet_owner', [address(params.admin), u64(params.fleetId), address(params.newOwner)], options);
   }

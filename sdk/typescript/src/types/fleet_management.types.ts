@@ -42,6 +42,11 @@ export interface DeactivateFleetParams {
   fleetId: bigint;
 }
 
+export interface ReactivateFleetParams {
+  caller: string;
+  fleetId: bigint;
+}
+
 export interface AdminReassignFleetOwnerParams {
   admin: string;
   fleetId: bigint;

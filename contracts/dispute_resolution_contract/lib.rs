@@ -308,6 +308,14 @@ impl DisputeResolutionContract {
             }
         }
 
+        // The target must actually be on the roster.  Without this guard,
+        // removing a non-member would filter nothing out, rewrite the
+        // unchanged list, drop a DataKey::Admin flag that was never set, and
+        // publish an `admin_removed` event for a removal that never happened.
+        if new_list.len() == admin_list.len() {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
         // Removing the last admin would permanently brick governance — no one
         // would be left who could call add_admin to recover.
         if new_list.is_empty() {
@@ -381,6 +389,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382 precedent: emit an event so off-chain indexers can track when
         // this contract pointer is updated by an admin.
         env.events().publish(
@@ -401,6 +412,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_set"),),
             (caller, escrow_contract),
@@ -420,6 +434,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &reputation_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382: emit event so off-chain indexers can track when this critical
         // contract pointer is updated by an admin.
         env.events().publish(
@@ -458,6 +475,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_penalty_updated"),),
             (caller, old_penalty, penalty),
@@ -489,6 +509,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationReward, &reward);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_reward_updated"),),
             (caller, old_reward, reward),
@@ -519,6 +542,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeSplitPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_split_penalty_updated"),),
             (caller, old_penalty, penalty),
@@ -893,7 +919,15 @@ impl DisputeResolutionContract {
         // sender_amount > record.amount, draining the protocol's pooled
         // balance into the sender address. Fail fast in the dispute contract
         // so the escrow state is never touched when the input is invalid.
-        if sender_share_bps > 10000 {
+        //
+        // The endpoints 0 and 10000 are rejected as well: a 0% sender share
+        // pays everything to the driver (identical to
+        // `resolve_dispute_pay_driver`) and a 100% sender share refunds
+        // everything to the sender (identical to
+        // `resolve_dispute_refund_sender`), yet routing them through split
+        // would still apply the split reputation penalty to the driver.
+        // Callers must use the dedicated entry point for those outcomes.
+        if sender_share_bps == 0 || sender_share_bps >= 10000 {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 

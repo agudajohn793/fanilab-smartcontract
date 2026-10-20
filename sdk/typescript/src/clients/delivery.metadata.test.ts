@@ -98,4 +98,38 @@ describe('DeliveryClient metadata', () => {
       },
     ], undefined);
   });
+
+  it('encodes every CargoCategory using the contract enum variant name', async () => {
+    const client = new DeliveryClient('CDELIVERY');
+    const call = getCall(client);
+    call.mockResolvedValue(42n);
+    const categories = [
+      CargoCategory.Documents,
+      CargoCategory.Electronics,
+      CargoCategory.Perishables,
+      CargoCategory.Clothing,
+      CargoCategory.General,
+    ];
+
+    for (const category of categories) {
+      await client.createDelivery({
+        sender: 'GSENDER',
+        recipient: 'GRECIPIENT',
+        deliveryId: 42n,
+        metadata: {
+          pickupLocation: 'Pickup',
+          dropoffLocation: 'Dropoff',
+          cargoDescription: { weightGrams: 2500, category, fragile: false },
+        },
+      });
+    }
+
+    expect(call.mock.calls.map(([, args]) => args[2].cargo_description.category)).toEqual([
+      'Documents',
+      'Electronics',
+      'Perishables',
+      'Clothing',
+      'General',
+    ]);
+  });
 });

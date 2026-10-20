@@ -83,6 +83,8 @@ All topic helpers live in `shared_types::events`. Each helper wraps `Symbol::new
 | `settlement_contract_proposed` | `"settlement_contract_proposed"` | `escrow_contract` |
 | `settlement_contract_updated` | `"settlement_contract_updated"` | `escrow_contract` |
 | `admin_transferred` | `"admin_transferred"` | `escrow_contract` |
+| `admin_proposed` | `"admin_proposed"` | `escrow_contract` |
+| `admin_proposal_cancelled` | `"admin_proposal_cancelled"` | `escrow_contract` |
 | `protocol_pause_status_changed` | `"protocol_pause_status_changed"` | `escrow_contract` |
 | `delivery_contract_initialized` | `"delivery_contract_initialized"` | `delivery_contract` |
 

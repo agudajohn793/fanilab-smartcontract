@@ -16,7 +16,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 CONTRACT_IDS_FILE="$PROJECT_ROOT/contract-ids-$NETWORK.json"
 
-SUPPORTED_CONTRACTS=("escrow_contract" "delivery_contract")
+SUPPORTED_CONTRACTS=(
+    "escrow_contract"
+    "delivery_contract"
+    "dispute_resolution_contract"
+    "fleet_management_contract"
+    "identity_reputation_contract"
+    "settlement_contract"
+)
 
 if [ -z "$CONTRACT_NAME" ]; then
     echo "❌ Usage: $0 <contract_name> [network]"
@@ -118,6 +125,102 @@ case "$CONTRACT_NAME" in
             --escrow_contract "$ESCROW_ID"
 
         echo "✓ Delivery initialized"
+        ;;
+    dispute_resolution_contract)
+        DISPUTE_ID=$(get_contract_id "dispute_resolution_contract")
+        DELIVERY_ID=$(get_contract_id "delivery_contract")
+        ESCROW_ID=$(get_contract_id "escrow_contract")
+        if [ -z "$DISPUTE_ID" ] || [ -z "$DELIVERY_ID" ] || [ -z "$ESCROW_ID" ]; then
+            echo "❌ dispute_resolution_contract, delivery_contract, and escrow_contract IDs must be present in $CONTRACT_IDS_FILE"
+            exit 1
+        fi
+        if [ -z "$ADMIN_ADDRESS" ]; then
+            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            exit 1
+        fi
+
+        echo "Initializing Dispute Resolution Contract..."
+        stellar contract invoke \
+            --id "$DISPUTE_ID" \
+            --source "$DEPLOYER_IDENTITY" \
+            --network "$NETWORK" \
+            -- init \
+            --admin "$ADMIN_ADDRESS" \
+            --delivery_contract "$DELIVERY_ID" \
+            --escrow_contract "$ESCROW_ID" \
+            --dispute_time_limit "${DISPUTE_TIME_LIMIT:-86400}" \
+            --dispute_resolution_limit "${DISPUTE_RESOLUTION_LIMIT:-86400}"
+
+        echo "✓ Dispute resolution initialized"
+        ;;
+    fleet_management_contract)
+        FLEET_ID=$(get_contract_id "fleet_management_contract")
+        if [ -z "$FLEET_ID" ]; then
+            echo "❌ fleet_management_contract ID not found in $CONTRACT_IDS_FILE"
+            exit 1
+        fi
+        if [ -z "$ADMIN_ADDRESS" ]; then
+            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            exit 1
+        fi
+
+        echo "Initializing Fleet Management Contract..."
+        stellar contract invoke \
+            --id "$FLEET_ID" \
+            --source "$DEPLOYER_IDENTITY" \
+            --network "$NETWORK" \
+            -- init \
+            --admin "$ADMIN_ADDRESS"
+
+        echo "✓ Fleet management initialized"
+        ;;
+    identity_reputation_contract)
+        IDENTITY_ID=$(get_contract_id "identity_reputation_contract")
+        DELIVERY_ID=$(get_contract_id "delivery_contract")
+        DISPUTE_ID=$(get_contract_id "dispute_resolution_contract")
+        if [ -z "$IDENTITY_ID" ] || [ -z "$DELIVERY_ID" ] || [ -z "$DISPUTE_ID" ]; then
+            echo "❌ identity_reputation_contract, delivery_contract, and dispute_resolution_contract IDs must be present in $CONTRACT_IDS_FILE"
+            exit 1
+        fi
+        if [ -z "$ADMIN_ADDRESS" ]; then
+            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            exit 1
+        fi
+
+        echo "Initializing Identity Reputation Contract..."
+        stellar contract invoke \
+            --id "$IDENTITY_ID" \
+            --source "$DEPLOYER_IDENTITY" \
+            --network "$NETWORK" \
+            -- init \
+            --admin "$ADMIN_ADDRESS" \
+            --delivery_contract "$DELIVERY_ID" \
+            --dispute_contract "$DISPUTE_ID"
+
+        echo "✓ Identity reputation initialized"
+        ;;
+    settlement_contract)
+        SETTLEMENT_ID=$(get_contract_id "settlement_contract")
+        ESCROW_ID=$(get_contract_id "escrow_contract")
+        if [ -z "$SETTLEMENT_ID" ] || [ -z "$ESCROW_ID" ]; then
+            echo "❌ settlement_contract and escrow_contract IDs must be present in $CONTRACT_IDS_FILE"
+            exit 1
+        fi
+        if [ -z "$ADMIN_ADDRESS" ]; then
+            echo "❌ ADMIN_ADDRESS must be set (in .env or the environment)"
+            exit 1
+        fi
+
+        echo "Initializing Settlement Contract..."
+        stellar contract invoke \
+            --id "$SETTLEMENT_ID" \
+            --source "$DEPLOYER_IDENTITY" \
+            --network "$NETWORK" \
+            -- init \
+            --admin "$ADMIN_ADDRESS" \
+            --escrow_contract "$ESCROW_ID"
+
+        echo "✓ Settlement initialized"
         ;;
     *)
         echo "❌ Initialization for '$CONTRACT_NAME' is not yet supported by this script."
