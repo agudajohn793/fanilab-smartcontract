@@ -60,6 +60,8 @@ SETTLEMENT_CONTRACT_ID=
 # Token Configuration
 TOKEN_ADDRESS=  # Token contract for escrow
 PLATFORM_FEE_BPS=250  # 2.5% platform fee
+DISPUTE_TIME_LIMIT=86400  # Optional; minimum time for raising a dispute (seconds)
+DISPUTE_RESOLUTION_LIMIT=86400  # Optional; minimum dispute resolution window (seconds)
 ```
 
 ## Network Configuration
@@ -282,6 +284,19 @@ stellar contract invoke \
 # Use the initialization script
 ./scripts/initialize-all-contracts.sh $STELLAR_NETWORK
 ```
+
+The script initializes all six contracts and configures their immediate peer
+contract integrations. It requires all six contract IDs in the network's
+`contract-ids-<network>.json` file, plus `ADMIN_ADDRESS` and `TOKEN_ADDRESS`.
+The dispute limits default to 86400 seconds (one day) and cannot be set below
+that minimum. The escrow-to-settlement integration is timelocked by the
+contract; configure and confirm it separately after its delay has elapsed.
+
+To initialize one contract instead, use
+`./scripts/initialize-contract.sh <contract_name> $STELLAR_NETWORK`. Supported
+names are `escrow_contract`, `delivery_contract`,
+`dispute_resolution_contract`, `fleet_management_contract`,
+`identity_reputation_contract`, and `settlement_contract`.
 
 ## Verification
 

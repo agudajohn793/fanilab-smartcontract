@@ -4,6 +4,22 @@ export { DisputeResolutionClient } from './clients/dispute_resolution.client';
 export { IdentityReputationClient } from './clients/identity_reputation.client';
 export { FleetManagementClient } from './clients/fleet_management.client';
 export { SettlementClient } from './clients/settlement.client';
+export {
+  ContractInvoker,
+  address,
+  bool,
+  bytes,
+  i128,
+  map,
+  native,
+  string,
+  symbol,
+  u32,
+  u64,
+  vec,
+} from './clients/invoker';
+export type { ScVal, Signer } from './clients/invoker';
+export type { PaginationOptions } from './clients/index';
 export * from './types/escrow.types';
 export * from './types/delivery.types';
 export * from './types/dispute_resolution.types';

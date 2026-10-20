@@ -118,6 +118,10 @@ jobs:
       working-directory: sdk/typescript
       run: npm ci
 
+    - name: Test SDK
+      working-directory: sdk/typescript
+      run: npm test
+
     - name: Type check SDK
       working-directory: sdk/typescript
       run: npx tsc --noEmit

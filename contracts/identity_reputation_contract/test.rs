@@ -38,8 +38,8 @@ proptest! {
 
 /// Like `setup`, but wires the real delivery and escrow contracts so that the
 /// `require_escrow_not_paused` cross-call made by `increase_reputation` /
-/// `award_reputation` resolves. Without this the reputation entry points panic
-/// on the very first storage read.
+/// `decrease_reputation` / `award_reputation` resolves. Without this the
+/// reputation entry points panic on the very first storage read.
 #[allow(clippy::type_complexity)]
 fn setup_wired() -> (
     Env,
@@ -86,6 +86,22 @@ fn setup() -> (
     let dispute_contract = Address::generate(&env);
     client.init(&admin, &delivery_contract, &dispute_contract);
     (env, admin, client, delivery_contract, dispute_contract)
+}
+
+/// Register an additional real delivery contract wired to the same escrow as
+/// the one from `setup_wired`. Needed by tests that repoint
+/// `DataKey::DeliveryContract`, because `require_escrow_not_paused` resolves
+/// through whatever delivery address is currently stored there.
+fn new_delivery_contract_on_same_escrow(
+    env: &Env,
+    admin: &Address,
+    delivery_id: &Address,
+) -> Address {
+    let escrow_addr =
+        delivery_contract::DeliveryContractClient::new(env, delivery_id).get_escrow_contract();
+    let new_id = env.register(delivery_contract::DeliveryContract, ());
+    delivery_contract::DeliveryContractClient::new(env, &new_id).init(admin, &escrow_addr);
+    new_id
 }
 
 // Task 2 tests: Driver Registration & KYC
@@ -137,16 +153,20 @@ fn test_has_driver_profile() {
 }
 
 #[test]
-fn test_register_driver_duplicate() {
+fn test_register_driver_is_idempotent() {
     let (env, _, client, _, _) = setup();
     let driver = Address::generate(&env);
-    client.register_driver(&driver);
+    let first = client.register_driver(&driver);
 
-    let result = client.try_register_driver(&driver);
-    match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
-        _ => panic!("Expected duplicate registration to fail with AlreadyInitialized"),
-    }
+    // A second registration must not panic (mirroring `register_user`) and
+    // must not re-baseline the profile: the original record is returned
+    // unchanged.
+    let second = client.register_driver(&driver);
+
+    assert_eq!(first, second);
+    assert_eq!(second.reputation_score, 50);
+    assert_eq!(second.deliveries_completed, 0);
+    assert_eq!(second.status, shared_types::DriverStatus::Active);
 }
 
 #[test]
@@ -196,7 +216,7 @@ fn test_profile_fields_persisted() {
 
 #[test]
 fn test_increase_reputation_basic() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -207,7 +227,7 @@ fn test_increase_reputation_basic() {
 
 #[test]
 fn test_decrease_reputation_basic() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -218,7 +238,7 @@ fn test_decrease_reputation_basic() {
 
 #[test]
 fn test_reputation_cannot_go_below_zero() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -229,7 +249,7 @@ fn test_reputation_cannot_go_below_zero() {
 
 #[test]
 fn test_reputation_upper_bound() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -242,7 +262,7 @@ fn test_reputation_upper_bound() {
 
 #[test]
 fn test_tier_bronze() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -264,7 +284,7 @@ fn test_tier_silver() {
 
 #[test]
 fn test_tier_gold() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -277,7 +297,7 @@ fn test_tier_gold() {
 
 #[test]
 fn test_tier_boundary_exact() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -325,7 +345,7 @@ fn drive_score_to(
 
 #[test]
 fn test_tier_boundary_49_is_bronze() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &driver, 49);
     assert_eq!(client.get_driver_tier(&driver), DriverTier::Bronze);
@@ -343,7 +363,7 @@ fn test_tier_boundary_50_is_silver() {
 
 #[test]
 fn test_tier_boundary_74_is_silver() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &driver, 74);
     assert_eq!(client.get_driver_tier(&driver), DriverTier::Silver);
@@ -351,7 +371,7 @@ fn test_tier_boundary_74_is_silver() {
 
 #[test]
 fn test_tier_boundary_75_is_gold() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &driver, 75);
     assert_eq!(client.get_driver_tier(&driver), DriverTier::Gold);
@@ -369,7 +389,7 @@ fn test_newly_registered_driver_starts_silver() {
 
 #[test]
 fn test_tier_edge_score_zero_is_bronze() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &driver, 0);
     assert_eq!(client.get_driver_tier(&driver), DriverTier::Bronze);
@@ -377,7 +397,7 @@ fn test_tier_edge_score_zero_is_bronze() {
 
 #[test]
 fn test_tier_edge_score_max_is_gold() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &driver, 100);
     assert_eq!(client.get_driver_tier(&driver), DriverTier::Gold);
@@ -385,7 +405,7 @@ fn test_tier_edge_score_max_is_gold() {
 
 #[test]
 fn test_enterprise_eligibility_agrees_with_tier_at_gold_boundary() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
 
     let below = Address::generate(&env);
     drive_score_to(&client, &delivery_contract, &below, 74);
@@ -411,7 +431,7 @@ fn test_get_driver_tier_rejects_unregistered_driver() {
 
 #[test]
 fn test_reputation_accumulation() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -424,7 +444,7 @@ fn test_reputation_accumulation() {
 
 #[test]
 fn test_reputation_deduction_sequence() {
-    let (env, _, client, delivery_contract, dispute_contract) = setup();
+    let (env, _, client, delivery_contract, dispute_contract) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -451,7 +471,7 @@ fn test_reputation_config_defaults() {
 
 #[test]
 fn test_admin_configured_points_take_effect() {
-    let (env, admin, client, delivery_contract, _) = setup();
+    let (env, admin, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -500,15 +520,23 @@ fn test_init_stores_cross_contract_addresses() {
 }
 
 #[test]
-fn test_dispute_contract_getter_round_trip_and_unauthorized_setter() {
-    let (env, admin, client, _, _) = setup();
-    let dispute_contract = Address::generate(&env);
+fn test_get_dispute_contract_before_init_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(IdentityReputationContract, ());
+    let client = IdentityReputationContractClient::new(&env, &contract_id);
 
     let result = client.try_get_dispute_contract();
     match result {
         Err(Ok(err)) => assert_eq!(err, FaniLabError::NotInitialized.into()),
         _ => panic!("Expected NotInitialized before configuring the dispute contract"),
     }
+}
+
+#[test]
+fn test_dispute_contract_getter_round_trip_and_unauthorized_setter() {
+    let (env, admin, client, _, _) = setup();
+    let dispute_contract = Address::generate(&env);
 
     let attacker = Address::generate(&env);
     let result = client.try_set_dispute_contract(&attacker, &dispute_contract);
@@ -523,13 +551,20 @@ fn test_dispute_contract_getter_round_trip_and_unauthorized_setter() {
 
 #[test]
 fn test_admin_can_repoint_cross_contracts() {
-    let (env, admin, client, _, _) = setup();
+    let (env, admin, client, delivery_id, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
-    let new_delivery_contract = Address::generate(&env);
+    // The pause guard resolves through the currently stored delivery
+    // contract, so the replacement must be a real delivery contract wired to
+    // the same escrow.
+    let new_delivery_contract = new_delivery_contract_on_same_escrow(&env, &admin, &delivery_id);
     let new_dispute_contract = Address::generate(&env);
     client.set_delivery_contract(&admin, &new_delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     client.set_dispute_contract(&admin, &new_dispute_contract);
     // Repointing the canonical addresses doesn't implicitly authorize them —
     // the allowlist is a separate, explicitly-managed mechanism (see init's
@@ -567,6 +602,12 @@ fn test_set_delivery_contract_publishes_event() {
     let new_contract = Address::generate(&env);
 
     client.set_delivery_contract(&admin, &new_contract);
+
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+
+    client.confirm_delivery_contract();
     assert_last_topic(&env, "delivery_contract_updated");
 }
 
@@ -614,7 +655,7 @@ fn test_is_authorized_contract_after_initialize() {
 /// address can subsequently call increase_reputation / decrease_reputation.
 #[test]
 fn test_authorized_third_contract_can_update_reputation() {
-    let (env, admin, client, _, _) = setup();
+    let (env, admin, client, _, _) = setup_wired();
     let third_contract = Address::generate(&env);
     let driver = Address::generate(&env);
     client.register_driver(&driver);
@@ -641,18 +682,24 @@ fn test_authorized_third_contract_can_update_reputation() {
 /// subsequent reputation call from that address must be rejected.
 #[test]
 fn test_deauthorized_caller_is_rejected() {
-    let (env, admin, client, delivery_contract, _) = setup();
+    let (env, admin, client, delivery_id, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
-    let new_delivery_contract = Address::generate(&env);
+    // Repoint to a real replacement delivery contract (the pause guard
+    // resolves through the stored delivery address), then de-authorize the
+    // superseded original.
+    let new_delivery_contract = new_delivery_contract_on_same_escrow(&env, &admin, &delivery_id);
     client.set_delivery_contract(&admin, &new_delivery_contract);
+    env.ledger().set_timestamp(
+        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+    );
+    client.confirm_delivery_contract();
     // Repointing alone doesn't revoke the old address — the allowlist is
     // managed explicitly, so the supersession must be done here too.
-    client.set_authorized_contract(&admin, &delivery_contract, &false);
+    client.set_authorized_contract(&admin, &delivery_id, &false);
 
-    let result =
-        client.try_increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
+    let result = client.try_increase_reputation(&delivery_id, &driver, &1u64, &1000u32, &false);
     match result {
         Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected the superseded delivery contract to fail with Unauthorized"),
@@ -680,7 +727,7 @@ fn test_set_cross_contracts_unauthorized() {
 
 #[test]
 fn test_deauthorized_delivery_contract_rejected_for_reputation_calls() {
-    let (env, admin, client, delivery_contract, _) = setup();
+    let (env, admin, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -723,7 +770,7 @@ fn test_set_authorized_contract_requires_admin() {
 /// An address that was never authorized cannot call increase_reputation.
 #[test]
 fn test_unauthorized_caller_cannot_increase_reputation() {
-    let (env, _, client, _, _) = setup();
+    let (env, _, client, _, _) = setup_wired();
     let random = Address::generate(&env);
     let driver = Address::generate(&env);
     client.register_driver(&driver);
@@ -738,7 +785,7 @@ fn test_unauthorized_caller_cannot_increase_reputation() {
 /// An address that was never authorized cannot call decrease_reputation.
 #[test]
 fn test_unauthorized_caller_cannot_decrease_reputation() {
-    let (env, _, client, _, _) = setup();
+    let (env, _, client, _, _) = setup_wired();
     let random = Address::generate(&env);
     let driver = Address::generate(&env);
     client.register_driver(&driver);
@@ -756,7 +803,7 @@ fn test_unauthorized_caller_cannot_decrease_reputation() {
 /// attributes and without incrementing `deliveries_completed`.
 #[test]
 fn test_award_reputation_is_flat_and_not_a_completion() {
-    let (env, _, client, _, dispute_contract) = setup();
+    let (env, _, client, _, dispute_contract) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -770,7 +817,7 @@ fn test_award_reputation_is_flat_and_not_a_completion() {
 /// A flat award is still capped at `MAX_REPUTATION` (100).
 #[test]
 fn test_award_reputation_respects_upper_bound() {
-    let (env, _, client, _, dispute_contract) = setup();
+    let (env, _, client, _, dispute_contract) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -784,7 +831,7 @@ fn test_award_reputation_respects_upper_bound() {
 /// Only an allowlisted contract may call `award_reputation`.
 #[test]
 fn test_unauthorized_caller_cannot_award_reputation() {
-    let (env, _, client, _, _) = setup();
+    let (env, _, client, _, _) = setup_wired();
     let random = Address::generate(&env);
     let driver = Address::generate(&env);
     client.register_driver(&driver);
@@ -850,7 +897,7 @@ fn test_is_eligible_for_enterprise_below_threshold() {
 
 #[test]
 fn test_is_eligible_for_enterprise_at_threshold() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -864,7 +911,7 @@ fn test_is_eligible_for_enterprise_at_threshold() {
 
 #[test]
 fn test_is_eligible_for_enterprise_above_threshold() {
-    let (env, _, client, delivery_contract, _) = setup();
+    let (env, _, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -902,6 +949,19 @@ fn test_admin_can_suspend_driver() {
     let profile = client.get_driver_profile(&driver);
     assert_eq!(profile.status, shared_types::DriverStatus::Suspended);
     assert!(client.is_driver_suspended(&driver));
+}
+
+#[test]
+fn test_authorized_contract_can_suspend_driver() {
+    let (env, admin, client, _, dispute_contract) = setup();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    client.suspend_driver(&dispute_contract, &driver);
+
+    assert!(client.is_driver_suspended(&driver));
+    client.reinstate_driver(&admin, &driver);
+    assert!(!client.is_driver_suspended(&driver));
 }
 
 /// Admin can reinstate a suspended driver; status returns to Active.
@@ -1006,7 +1066,7 @@ fn test_increase_reputation_still_rejected_while_escrow_paused() {
 /// Suspension preserves reputation score, deliveries_completed, and kyc_verified.
 #[test]
 fn test_suspension_preserves_driver_history() {
-    let (env, admin, client, delivery_contract, _) = setup();
+    let (env, admin, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -1032,20 +1092,24 @@ fn test_suspension_preserves_driver_history() {
     assert_eq!(after.status, shared_types::DriverStatus::Suspended);
 }
 
-/// A suspended driver cannot re-register to reset their profile — the profile
-/// still exists so `register_driver` panics with `AlreadyInitialized`.
+/// A suspended driver cannot re-register to reset their profile —
+/// `register_driver` is idempotent and returns the existing (suspended)
+/// profile unchanged, so the score-reset attack stays blocked even though
+/// re-registration no longer panics.
 #[test]
-fn test_suspended_driver_cannot_re_register() {
+fn test_suspended_driver_cannot_reset_via_reregistration() {
     let (env, admin, client, _, _) = setup();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
     client.suspend_driver(&admin, &driver);
 
-    let result = client.try_register_driver(&driver);
-    match result {
-        Err(Ok(err)) => assert_eq!(err, FaniLabError::AlreadyInitialized.into()),
-        _ => panic!("Expected AlreadyInitialized — suspended profile must block re-registration"),
-    }
+    let profile = client.register_driver(&driver);
+
+    // Profile unchanged: still suspended, score not reset, no new baseline.
+    assert_eq!(profile.status, shared_types::DriverStatus::Suspended);
+    assert_eq!(profile.reputation_score, 50);
+    assert_eq!(profile.deliveries_completed, 0);
+    assert!(client.is_driver_suspended(&driver));
 }
 
 /// Suspending an already-suspended driver returns `InvalidState`.
@@ -1093,7 +1157,7 @@ fn test_suspend_nonexistent_driver_returns_provider_not_found() {
 /// After reinstatement, reputation calls continue to work normally.
 #[test]
 fn test_reinstated_driver_reputation_resumes_normally() {
-    let (env, admin, client, delivery_contract, _) = setup();
+    let (env, admin, client, delivery_contract, _) = setup_wired();
     let driver = Address::generate(&env);
     client.register_driver(&driver);
 
@@ -1105,6 +1169,93 @@ fn test_reinstated_driver_reputation_resumes_normally() {
     let profile = client.get_driver_profile(&driver);
     assert_eq!(profile.reputation_score, 55);
     assert_eq!(profile.deliveries_completed, 1);
+    assert_eq!(profile.status, shared_types::DriverStatus::Active);
+}
+
+// ── Suspension gating for reputation updates ────────────────────────────────
+//
+// Regression coverage: a suspended driver's profile is frozen for audit, so
+// the reputation-minting entry points must reject updates with `InvalidState`
+// until `reinstate_driver` restores normal scoring. Penalties are
+// deliberately exempt — see `test_suspended_driver_still_receives_penalties`.
+
+/// A suspended driver must not receive `increase_reputation` updates.
+#[test]
+fn test_suspended_driver_cannot_receive_reputation_increases() {
+    let (env, admin, client, delivery_contract, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    let result =
+        client.try_increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected InvalidState for increase_reputation on a suspended driver"),
+    }
+
+    // Profile untouched: no points credited, no delivery counted.
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 50);
+    assert_eq!(profile.deliveries_completed, 0);
+}
+
+/// A suspended driver must not receive flat `award_reputation` bonuses either.
+#[test]
+fn test_suspended_driver_cannot_receive_reputation_awards() {
+    let (env, admin, client, _, dispute_contract) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    let result = client.try_award_reputation(&dispute_contract, &driver, &10u32);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected InvalidState for award_reputation on a suspended driver"),
+    }
+    assert_eq!(client.get_driver_profile(&driver).reputation_score, 50);
+}
+
+/// Penalties are exempt from the suspension gate: a disciplinary decrease
+/// (e.g. a dispute ruling against the driver) must still land while the
+/// driver is suspended, otherwise suspension would shield wrongdoers from
+/// punishment.
+#[test]
+fn test_suspended_driver_still_receives_penalties() {
+    let (env, admin, client, _, dispute_contract) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+    client.suspend_driver(&admin, &driver);
+
+    client.decrease_reputation(&dispute_contract, &driver, &10u32);
+    assert_eq!(client.get_driver_profile(&driver).reputation_score, 40);
+}
+
+/// Reinstatement restores normal scoring: the frozen profile resumes from its
+/// preserved score and keeps counting deliveries.
+#[test]
+fn test_reinstatement_restores_normal_scoring() {
+    let (env, admin, client, delivery_contract, _) = setup_wired();
+    let driver = Address::generate(&env);
+    client.register_driver(&driver);
+
+    // Build history before suspension: 50 + 5 = 55.
+    client.increase_reputation(&delivery_contract, &driver, &1u64, &1000u32, &false);
+    client.suspend_driver(&admin, &driver);
+
+    // Frozen while suspended: no points, no delivery counted.
+    let frozen =
+        client.try_increase_reputation(&delivery_contract, &driver, &2u64, &1000u32, &false);
+    assert!(frozen.is_err(), "suspended driver must not gain reputation");
+    assert_eq!(client.get_driver_profile(&driver).reputation_score, 55);
+    assert_eq!(client.get_driver_profile(&driver).deliveries_completed, 1);
+
+    // Reinstated scoring continues from the preserved score: 55 + 5 = 60.
+    client.reinstate_driver(&admin, &driver);
+    client.increase_reputation(&delivery_contract, &driver, &3u64, &1000u32, &false);
+    let profile = client.get_driver_profile(&driver);
+    assert_eq!(profile.reputation_score, 60);
+    assert_eq!(profile.deliveries_completed, 2);
     assert_eq!(profile.status, shared_types::DriverStatus::Active);
 }
 
@@ -1128,7 +1279,7 @@ fn test_suspend_reinstate_cycle() {
 /// Existing registration and reputation flows are unaffected for active drivers.
 #[test]
 fn test_existing_flows_unaffected_for_active_drivers() {
-    let (env, admin, client, delivery_contract, dispute_contract) = setup();
+    let (env, admin, client, delivery_contract, dispute_contract) = setup_wired();
     let driver = Address::generate(&env);
 
     // Full existing flow still works end-to-end.

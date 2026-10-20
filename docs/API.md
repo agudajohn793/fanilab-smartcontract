@@ -23,6 +23,7 @@ The protocol supports on-chain secondary indexes to enable efficient queries wit
 Secondary indexes are maintained alongside primary records in persistent storage for:
 - **Deliveries by Sender** — all delivery IDs initiated by a given sender
 - **Deliveries by Recipient** — all delivery IDs with a given recipient
+- **Deliveries by Driver** — all delivery IDs assigned to a given driver
 - **Escrows by Sender** — all escrow delivery IDs initiated by a given sender
 - **Escrows by Recipient** — all escrow delivery IDs for a given recipient
 - **Escrows by Driver** — all escrow delivery IDs assigned to a given driver
@@ -35,14 +36,29 @@ These indexes are automatically maintained by the respective contracts and are b
 **Delivery Contract:**
 - `get_deliveries_by_sender(sender: Address) -> Vec<DeliveryId>` — all deliveries by sender
 - `get_deliveries_by_recipient(recipient: Address) -> Vec<DeliveryId>` — all deliveries to recipient
+- `get_deliveries_by_driver(driver: Address) -> Vec<DeliveryId>` — all deliveries assigned to a driver
+- `get_deliveries_page(owner: Address, kind: u32, offset: u32, limit: u32) -> Vec<DeliveryId>` — a page from a delivery index
 
 **Escrow Contract:**
 - `get_escrows_by_sender(sender: Address) -> Vec<u64>` — all escrow delivery IDs by sender
 - `get_escrows_by_recipient(recipient: Address) -> Vec<u64>` — all escrow delivery IDs for recipient
 - `get_escrows_by_driver(driver: Address) -> Vec<u64>` — all escrow delivery IDs for driver
+- `get_escrows_page(owner: Address, kind: u32, offset: u32, limit: u32) -> Vec<u64>` — a page from an escrow index
 
 **Fleet Management Contract:**
 - `get_fleet_roster(fleet_id: FleetId, offset: u32, limit: u32) -> Vec<Address>` — a page of active drivers in a fleet (limit clamped to 100)
+
+### Pagination Guidelines
+
+Use `get_deliveries_page` and `get_escrows_page` to retrieve indexes larger
+than one page. Both accept a zero-based `offset` and a `limit` that is clamped
+to 100; request subsequent pages by increasing the offset by the number of
+records returned (for example, offsets 0, 100, 200 with a limit of 100).
+`kind` selects the index: `0` = sender, `1` = recipient, and `2` = driver.
+An unknown owner or offset beyond the end returns an empty vector. The
+non-paginated sender/recipient/driver getters are convenient for small indexes
+but return at most the first 100 records; use the page methods to enumerate
+larger indexes.
 
 ### Interim: Event-Replay Indexing
 
@@ -124,7 +140,9 @@ escrow_contract.update_platform_fee(
 ```
 
 #### `propose_admin`
-Initiate admin transfer to a new address.
+Initiate admin transfer to a new address. The current admin can cancel a
+pending nomination with `cancel_admin_proposal` before the proposed admin
+accepts. This emits `admin_proposed` with `(current_admin, new_admin)`.
 
 **Parameters:**
 - `current_admin: Address` - Current admin address
@@ -138,6 +156,25 @@ escrow_contract.propose_admin(
     &current_admin,
     &new_admin_address
 );
+```
+
+#### `cancel_admin_proposal`
+Cancel the pending admin nomination. Only the current admin may cancel, and a
+proposal must be pending. Emits `admin_proposal_cancelled` with
+`(current_admin, cancelled_admin)`.
+
+**Parameters:**
+- `current_admin: Address` - Current admin address
+
+**Authorization:** Current admin
+
+**Errors:**
+- `Unauthorized` - Caller is not the current admin
+- `InvalidState` - No admin proposal is pending
+
+**Example:**
+```rust
+escrow_contract.cancel_admin_proposal(&current_admin);
 ```
 
 #### `accept_admin`
@@ -269,6 +306,8 @@ escrow_contract.set_dispute_resolution_contract(
 #### `set_delivery_contract`
 Configure the delivery contract address that `create_escrow` and
 `create_escrows_batch` cross-call to verify delivery integrity (Issue #295).
+This call proposes a new address; the active address remains unchanged until
+the three-day review period elapses and `confirm_delivery_contract` is called.
 
 When configured, both creation entry points:
 1. Confirm that a delivery record for the supplied `delivery_id` exists
@@ -301,7 +340,15 @@ leave the delivery contract unconfigured.
 - `Unauthorized` - Caller is not the configured admin
 - `NotInitialized` - Contract has not been initialised
 
-**Events:** none (configuration change only)
+**Events:** `delivery_contract_change_proposed`; confirmation emits
+`delivery_contract_updated`.
+
+#### `confirm_delivery_contract`
+Apply the pending delivery contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 **Example:**
 ```rust
@@ -732,20 +779,22 @@ escrow_contract.release_expired_holdback(&delivery_id);
 Admin-only configuration: set the holdback window (in seconds) that must elapse
 before `release_expired_holdback` may be called.
 
-The window must be at least `MIN_HOLDBACK_WINDOW_SECONDS` (86 400 s = 1 day) to
-guarantee the recipient has a realistic opportunity to either release the escrow or
-raise a dispute before the driver can claim it unilaterally. The default when no
-value has been set is `DEFAULT_HOLDBACK_WINDOW_SECONDS` (259 200 s = 3 days).
+The window must be between `MIN_HOLDBACK_WINDOW_SECONDS` (86 400 s = 1 day) and
+`MAX_HOLDBACK_WINDOW_SECONDS` (31 536 000 s = 1 year), inclusive. The minimum
+guarantees the recipient has a realistic opportunity to either release the escrow
+or raise a dispute before the driver can claim it unilaterally; the maximum
+prevents impractically long release timelines. The default when no value has
+been set is `DEFAULT_HOLDBACK_WINDOW_SECONDS` (259 200 s = 3 days).
 
 **Parameters:**
 - `admin: Address` - Admin address (must sign)
-- `new_window_seconds: u64` - New holdback window in seconds (must be ≥ 86 400)
+- `new_window_seconds: u64` - New holdback window in seconds (must be between 86 400 and 31 536 000, inclusive)
 
 **Authorization:** Admin only
 
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
-- `InvalidState` - `new_window_seconds` is below `MIN_HOLDBACK_WINDOW_SECONDS` (86 400 s)
+- `InvalidState` - `new_window_seconds` is outside the permitted range of 86 400–31 536 000 seconds
 
 **Events:** `holdback_window_updated`
 
@@ -1104,6 +1153,8 @@ Create a new delivery request.
 
 **Returns:** `DeliveryId`
 
+**Validation:** `origin` and `destination` must each contain 2–256 bytes.
+
 **Events:** `delivery_created`
 
 **State Changes:**
@@ -1352,7 +1403,9 @@ delivery_contract.reclaim_delivery_expired_escrow(&delivery_id);
 #### `set_escrow_contract`
 Point the delivery contract at the escrow contract it should call. Unlike the
 escrow address supplied to `init`, this may be re-pointed later, which is how
-a redeployed escrow contract is adopted without redeploying deliveries.
+a redeployed escrow contract is adopted without redeploying deliveries. This
+call proposes a new address; the active address changes only after three days
+and a separate `confirm_escrow_contract` call.
 
 **Parameters:**
 - `admin: Address` - Admin address
@@ -1362,6 +1415,16 @@ a redeployed escrow contract is adopted without redeploying deliveries.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
+
+**Events:** `escrow_contract_change_proposed`; confirmation emits the existing
+escrow-update event.
+
+#### `confirm_escrow_contract`
+Apply the pending escrow contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 **Notes:**
 - Existing escrows are unaffected; only the address used for future
@@ -1433,7 +1496,8 @@ Update a delivery's metadata while it is still `Pending` and only by the origina
 **Errors:**
 - `Unauthorized` - Caller is not the sender
 - `InvalidState` - Delivery is not `Pending`
-- `InvalidMetadata` - The replacement metadata fails validation
+- `InvalidMetadata` - The replacement metadata fails validation, including when
+  `origin` or `destination` is shorter than 2 bytes or longer than 256 bytes
 - `DeliveryNotFound` - No delivery exists for this ID
 
 **Events:** `delivery_metadata_updated`
@@ -2110,7 +2174,9 @@ Initialize the fleet management contract.
 - Resets the fleet counter to `0`
 
 #### `set_identity_contract`
-Configure the identity/reputation contract used for automatic driver profile creation on fleet registration.
+Propose the identity/reputation contract used for automatic driver profile
+creation on fleet registration. The active address remains unchanged until the
+three-day review period elapses and `confirm_identity_contract` is called.
 
 **Parameters:**
 - `admin: Address` - Admin address
@@ -2121,6 +2187,31 @@ Configure the identity/reputation contract used for automatic driver profile cre
 **Errors:**
 - `NotInitialized` - Contract has not been initialized
 - `Unauthorized` - Caller is not the stored admin
+
+**Pending value:** `get_pending_identity_contract`
+
+#### `confirm_identity_contract`
+Apply the pending identity contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
+
+**Errors:** `NoPendingContractChange`, `ContractChangeTimelockNotElapsed`
+
+#### `set_escrow_contract`
+Propose the escrow contract used for fleet pause checks. It becomes active
+after three days and a separate `confirm_escrow_contract` call. The pending
+address is available through `get_pending_escrow_contract`.
+
+#### `confirm_escrow_contract`
+Apply the pending escrow contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
+
+**Errors:** `NoPendingContractChange`, `ContractChangeTimelockNotElapsed`
 
 ### Fleet Operations
 
@@ -2197,7 +2288,7 @@ identity_reputation_contract.
   unaffected — those were fixed at escrow creation time.
 
 #### `admin_reassign_fleet_owner`
-Emergency recovery path for a compromised fleet-owner key. Only the protocol admin may call this.
+Propose an emergency reassignment for a compromised fleet-owner key. The reassignment does not take effect until the proposed address separately accepts it.
 
 **Parameters:**
 - `admin: Address` - Contract admin
@@ -2211,9 +2302,23 @@ Emergency recovery path for a compromised fleet-owner key. Only the protocol adm
 - `Unauthorized` - Caller is not the admin
 
 **State Changes:**
+- Stores the pending new owner without changing the fleet profile.
+- Re-proposing replaces the pending target.
+
+**Events:** `fleet_owner_reassignment_proposed`
+
+#### `accept_fleet_owner_reassignment`
+Accept a pending admin-proposed owner reassignment. Only the exact proposed address may accept, and it must authorize the call.
+
+**Parameters:**
+- `new_owner: Address` - Proposed new owner (must sign)
+- `fleet_id: FleetId` - Fleet identifier
+
+**State Changes:**
 - Updates `profile.owner` to `new_owner`
 - Resets `profile.signers` to `[new_owner]` with `signature_threshold = 1`
-- Bypasses the normal fleet-owner timelock flow and the owner's own authorization path
+- Clears any pending treasury update from the prior owner
+- Removes the pending reassignment
 
 **Events:** `fleet_owner_reassigned`
 
@@ -2528,7 +2633,9 @@ Return the configured reputation reward structure.
 **Returns:** `ReputationConfig`
 
 #### `set_delivery_contract`
-Set the address of the delivery contract that may call into reputation updates.
+Propose the delivery contract address allowed to call reputation updates. The
+active address changes only after three days and a separate
+`confirm_delivery_contract` call.
 
 **Parameters:**
 - `admin: Address` - Admin address (must sign)
@@ -2539,7 +2646,15 @@ Set the address of the delivery contract that may call into reputation updates.
 **Errors:**
 - `Unauthorized` - Caller is not the stored admin
 
-**Events:** `delivery_contract_updated` - `(admin, delivery_contract)`
+**Events:** `delivery_contract_change_proposed`; confirmation emits
+`delivery_contract_updated` - `(admin, delivery_contract)`
+
+#### `confirm_delivery_contract`
+Apply the pending delivery contract after its three-day review period.
+
+**Parameters:** none
+
+**Authorization:** Permissionless after the proposal's activation time
 
 #### `set_dispute_contract`
 Set the address of the dispute-resolution contract that may authorize reputation changes.
@@ -2622,7 +2737,7 @@ Suspend a registered driver. Sets `DriverProfile.status` to `DriverStatus::Suspe
 The profile record is **never deleted** — all history (reputation score,
 deliveries completed, KYC status) is preserved. This prevents a suspended
 driver from calling `register_driver` again to obtain a clean slate, since
-that function panics when a profile already exists.
+that function is idempotent and returns the existing profile unchanged.
 
 > **Note:** Gating `assign_driver` on driver suspension status is a deliberate
 > follow-up task in `delivery_contract` and is out of scope here.
@@ -2693,16 +2808,20 @@ let suspended: bool = identity_contract.is_driver_suspended(&driver);
 
 #### `register_driver`
 Register a new driver profile with a starting reputation score of 50.
+Idempotent: if a profile already exists for this address, the existing
+profile is returned unchanged (no event, no state mutation), mirroring
+`register_user`. This means a suspended driver cannot reset their score by
+re-registering, and cross-contract callers do not need defensive
+pre-checks to avoid an `AlreadyInitialized` panic.
 
 **Parameters:**
 - `driver: Address` - Driver address (must sign)
 
 **Authorization:** Driver (must sign)
 
-**Errors:**
-- `AlreadyInitialized` - A profile already exists for this address
+**Returns:** `DriverProfile` — the newly created profile, or the existing one
 
-**Events:** `driver_registered`
+**Events:** `driver_registered` (first registration only)
 
 **State Changes:**
 - Creates `DriverProfile` with `reputation_score = 50`, `deliveries_completed = 0`, `kyc_verified = false`
@@ -2713,19 +2832,17 @@ identity_contract.register_driver(&driver);
 ```
 
 #### `register_user`
-Register a new user (sender/recipient) profile.
+Register a new user (sender/recipient) profile. Idempotent: if a profile
+already exists for this address, the existing profile is returned unchanged.
 
 **Parameters:**
 - `user: Address` - User address (must sign)
 
 **Authorization:** User (must sign)
 
-**Returns:** `UserProfile`
+**Returns:** `UserProfile` — the newly created profile, or the existing one
 
-**Errors:**
-- `AlreadyInitialized` - A profile already exists for this address
-
-**Events:** `user_registered`
+**Events:** `user_registered` (first registration only)
 
 #### `get_driver_profile`
 Retrieve a driver's profile.
@@ -2783,6 +2900,7 @@ Increase a driver's reputation score after a successful delivery.
 - `NotInitialized` - Contract addresses not configured
 - `Unauthorized` - Caller is not an authorized contract
 - `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is suspended (reputation is frozen until reinstatement)
 
 **Events:** `reputation_increased`
 
@@ -2790,6 +2908,7 @@ Increase a driver's reputation score after a successful delivery.
 - Adds base 5 points + 3 for heavy cargo (>5 000 g) + 2 for fragile cargo
 - Caps `reputation_score` at 100
 - Increments `deliveries_completed`
+- Rejected with `InvalidState` while the driver is suspended
 
 **Example:**
 ```rust
@@ -2821,6 +2940,8 @@ Decrease a driver's reputation score following a dispute resolved in the sender'
 
 **State Changes:**
 - Decreases `reputation_score` by `points`, flooring at 0 (saturating subtraction)
+- Deliberately **not** gated on driver suspension — penalties must still land
+  while a driver is suspended (only reputation _increases_ freeze on suspension)
 
 **Example:**
 ```rust
@@ -2848,12 +2969,14 @@ the delivery is later confirmed).
 **Errors:**
 - `Unauthorized` - Caller is not an authorized contract
 - `ProviderNotFound` - Driver profile does not exist
+- `InvalidState` - Driver is suspended (reputation is frozen until reinstatement)
 
 **Events:** `reputation_awarded`
 
 **State Changes:**
 - Increases `reputation_score` by `points`, capped at 100
 - Leaves `deliveries_completed` unchanged
+- Rejected with `InvalidState` while the driver is suspended
 
 **Example:**
 ```rust
@@ -2898,13 +3021,15 @@ Check whether a driver's reputation score meets the enterprise threshold (≥ 75
 
 ## Settlement Contract
 
-> **Phase 3 — Stub implementation.** The Settlement contract is deployed but its
-> functions are not yet implemented. Function signatures and intended behaviour
-> are documented here for integrator reference; the bodies will be filled in
-> during Phase 3 development.
-
 Handles cross-border currency swaps during escrow release, allowing drivers to
-receive payment in their preferred asset via the Stellar DEX or liquidity pools.
+receive payment in their preferred asset via an admin-configured swap router.
+The configured router must implement `swap_exact_tokens_for_tokens` with
+`(caller, from_token, to_token, recipient, amount, min_amount_out)` arguments
+and return the actual `amount_out`. It must consume the approved source amount
+and deliver output directly to `recipient`. The escrow funds the settlement
+contract immediately before invoking the swap. Swaps must execute before the
+provided deadline, which is capped at 300 seconds after the current ledger
+timestamp.
 
 ### Initialization
 
@@ -2916,9 +3041,21 @@ Initialize the settlement contract.
 
 **Authorization:** Admin (must sign)
 
-> **Note:** Phase 3 stub — no state is persisted yet.
-
 ### Query Functions
+
+#### `set_swap_router`
+Configure the trusted swap router.
+
+**Parameters:**
+- `admin: Address` - Contract administrator (must sign)
+- `router: Address` - Router implementing the swap interface described above
+
+**Authorization:** Admin (must sign)
+
+#### `get_swap_router`
+Return the configured swap router, if one has been set.
+
+**Returns:** `Option<Address>`
 
 #### `get_driver_preference`
 Return the driver's preferred asset for payment, if one has been set.
@@ -2927,8 +3064,6 @@ Return the driver's preferred asset for payment, if one has been set.
 - `_driver: Address` - Driver address
 
 **Returns:** `Option<Address>`
-
-> **Note:** Phase 3 stub — always returns `None`.
 
 ### Settlement Operations
 
@@ -2941,16 +3076,25 @@ Intended to integrate with the Stellar DEX or a liquidity pool to convert
 
 **Parameters:**
 - `caller: Address` - Authorized caller (must sign)
-- `_from_token: Address` - Source token contract address
-- `_to_token: Address` - Target token contract address
-- `_recipient: Address` - Address receiving the swapped funds
-- `_amount: i128` - Amount of `from_token` to swap
-- `_min_amount_out: i128` - Minimum acceptable output (slippage guard)
+- `from_token: Address` - Source token contract address
+- `to_token: Address` - Target token contract address
+- `recipient: Address` - Address receiving the swapped funds
+- `amount: i128` - Amount of `from_token` to swap
+- `min_amount_out: i128` - Minimum acceptable output (slippage guard)
+- `deadline: u64` - Unix timestamp after which the swap must be rejected; must
+  be no more than 300 seconds after the current ledger timestamp
 
 **Authorization:** Caller (must sign)
 
-> **Note:** Phase 3 stub — no swap is performed.
-**Returns:** `Address` — fleet treasury if active, else driver's own address
+**Errors:**
+- `SwapRouterNotConfigured` - No router has been configured.
+- `InvalidSwapParameters` - Amount, token pair, or minimum output is invalid.
+- `InsufficientSwapBalance` - Settlement does not hold the requested input.
+- `SwapOutputBelowMinimum` - Router output is below `min_amount_out`.
+- `SwapInputNotConsumed` - Router did not consume the exact approved input.
+- `InvalidSwapDeadline` - Deadline is expired or exceeds the 300-second window.
+
+**Returns:** `()`
 
 #### `get_driver_fleet_status`
 Get driver's status in a fleet.
@@ -3072,6 +3216,9 @@ pub struct CargoDescriptor {
 }
 ```
 
+`CargoDescriptor::has_valid_weight()` accepts inclusive weights from 1 gram through
+1,000,000 grams (1,000 kg); delivery metadata validation uses the same method.
+
 #### `DriverProfile`
 ```rust
 pub struct DriverProfile {
@@ -3099,6 +3246,7 @@ pub enum FaniLabError {
     ProviderNotFound = 9,       // Driver not found
     ProtocolPaused = 11,        // Protocol paused, fund movements halted
     LimitExceeded = 12,         // A bounded collection is already at its max length
+    TimelockNotElapsed = 13,    // A timelocked operation was attempted too early
 }
 ```
 

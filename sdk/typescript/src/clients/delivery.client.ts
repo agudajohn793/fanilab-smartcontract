@@ -75,6 +75,10 @@ export class DeliveryClient {
     );
   }
 
+  async confirmEscrowContract(options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('confirm_escrow_contract', [], options);
+  }
+
   /**
    * Create a new delivery
    */

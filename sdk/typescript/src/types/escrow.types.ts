@@ -4,6 +4,20 @@
 
 import { EscrowStatus, ProtocolConfig, EscrowRecord } from './common.types';
 
+/**
+ * Contract-specific error codes raised by `escrow_contract::EscrowError`.
+ * Shared failures use the `ErrorCodes` map in `common.types.ts`.
+ */
+export const EscrowErrorCodes = {
+  InvalidFee: 5,
+  InvalidToken: 6,
+  InvalidAmount: 7,
+  NoPendingSettlementChange: 8,
+  InvalidDriver: 10,
+  InvalidParties: 11,
+  BatchTooLarge: 12,
+} as const;
+
 export interface InitParams {
   admin: string;
   token: string;

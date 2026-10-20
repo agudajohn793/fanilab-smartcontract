@@ -1,22 +1,21 @@
 #![no_std]
 
 use shared_types::{
-    DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError, StorageKey,
+    DriverPreferenceUpdatedEvent, EscrowContractUpdatedEvent, FaniLabError,
+    PendingPeerContractChange, StorageKey,
 };
 
-// Settlement contract for cross-border currency swaps
-// This contract will handle currency conversions between different assets
-// during escrow release for international deliveries.
-//
-// CRITICAL: This contract is currently a stub. Phase 3 implementation is required
-// before mainnet deployment. See PRODUCTION_READINESS.md "Next Steps for Mainnet Launch."
+// Settlement contract for cross-border currency swaps through an admin-configured router.
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, Env, IntoVal,
+};
 
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
     EscrowContract,
+    PendingEscrowContract,
     /// Per-driver preferred payout asset recorded via
     /// `set_driver_preference` (Issue #459).
     DriverPreference(Address),
@@ -27,6 +26,12 @@ pub enum DataKey {
 #[repr(u32)]
 pub enum SettlementError {
     SwapNotImplemented = 1,
+    SwapRouterNotConfigured = 2,
+    InvalidSwapParameters = 3,
+    SwapOutputBelowMinimum = 4,
+    InsufficientSwapBalance = 5,
+    SwapInputNotConsumed = 6,
+    InvalidSwapDeadline = 7,
 }
 
 #[contract]
@@ -58,7 +63,8 @@ impl SettlementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
-    /// Update the escrow contract address. Admin only.
+    /// Propose an escrow contract address. Admin only; it takes effect after
+    /// a three-day review period and separate confirmation.
     ///
     /// Emits `escrow_contract_updated` so off-chain indexers can track
     /// escrow rotations (Issue #588).
@@ -72,20 +78,59 @@ impl SettlementContract {
         if admin != stored_admin {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::EscrowContract, &new_escrow);
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: new_escrow.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
 
         env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, new_escrow, activates_at),
+        );
+    }
+
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FaniLabError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
+        env.storage()
+            .instance()
+            .extend_ttl(shared_types::ttl::LEDGER_TTL_THRESHOLD, shared_types::ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
             (shared_types::events::escrow_contract_updated(&env),),
             EscrowContractUpdatedEvent {
-                admin,
-                new_escrow,
+                admin: pending.proposed_by,
+                new_escrow: pending.address,
             },
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     /// Get the configured escrow contract address.
@@ -99,12 +144,33 @@ impl SettlementContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
+    /// Set the trusted swap-router contract. Admin only.
+    ///
+    /// The router must implement `swap_exact_tokens_for_tokens` with the
+    /// argument and return-value contract used by `execute_settlement_swap`.
+    pub fn set_swap_router(env: Env, admin: Address, router: Address) {
+        admin.require_auth();
+        if !is_admin(&env, &admin) {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::SwapRouter, &router);
+        env.storage().instance().extend_ttl(
+            shared_types::ttl::LEDGER_TTL_THRESHOLD,
+            shared_types::ttl::LEDGER_TTL_EXTEND_TO,
+        );
+    }
+
+    /// Get the configured swap-router contract.
+    pub fn get_swap_router(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::SwapRouter)
+    }
+
     /// Record the asset a driver wants to be paid in.
     ///
     /// Any driver may set (or overwrite) their own preference; the caller must
     /// authenticate as the driver. Stored in persistent storage so the entry
-    /// survives independently of the contract's instance entry, and its TTL is
-    /// extended on every write (Issue #459).
+    /// survives independently of the contract's instance entry, and both the
+    /// preference and instance-entry TTLs are extended on every write (Issue #459).
     ///
     /// Emits `driver_preference_updated` so indexers can track preference
     /// changes (Issue #589).
@@ -116,6 +182,10 @@ impl SettlementContract {
         env.storage().persistent().set(&key, &to_token);
         env.storage().persistent().extend_ttl(
             &key,
+            shared_types::ttl::LEDGER_TTL_THRESHOLD,
+            shared_types::ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.storage().instance().extend_ttl(
             shared_types::ttl::LEDGER_TTL_THRESHOLD,
             shared_types::ttl::LEDGER_TTL_EXTEND_TO,
         );
@@ -161,19 +231,16 @@ impl SettlementContract {
         env.storage().persistent().get(&key)
     }
 
-    /// Execute asset swap and transfer to driver.
-    ///
-    /// PRODUCTION GUARD: This function will panic if called in production before
-    /// Phase 3 implementation is complete. This is intentional to prevent silent
-    /// no-op swaps on mainnet with unimplemented settlement logic.
+    /// Swap escrow-funded tokens through the configured router.
     pub fn execute_settlement_swap(
         env: Env,
         caller: Address,
-        _from_token: Address,
-        _to_token: Address,
-        _recipient: Address,
-        _amount: i128,
-        _min_amount_out: i128,
+        from_token: Address,
+        to_token: Address,
+        recipient: Address,
+        amount: i128,
+        min_amount_out: i128,
+        deadline: u64,
     ) {
         caller.require_auth();
 
@@ -191,9 +258,57 @@ impl SettlementContract {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
 
-        // CRITICAL GUARD: Prevent execution of stub function on mainnet.
-        // Phase 3 settlement logic must be implemented before production use.
-        panic_with_error!(&env, SettlementError::SwapNotImplemented);
+        let now = env.ledger().timestamp();
+        if deadline < now
+            || deadline > now.saturating_add(shared_types::SETTLEMENT_SWAP_DEADLINE_WINDOW_SECONDS)
+        {
+            panic_with_error!(&env, SettlementError::InvalidSwapDeadline);
+        }
+
+        if amount <= 0 || min_amount_out < 0 || from_token == to_token {
+            panic_with_error!(&env, SettlementError::InvalidSwapParameters);
+        }
+
+        let router: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::SwapRouter)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::SwapRouterNotConfigured));
+
+        let current_contract = env.current_contract_address();
+        let input_token = soroban_sdk::token::Client::new(&env, &from_token);
+        let balance_before = input_token.balance(&current_contract);
+        if balance_before < amount {
+            panic_with_error!(&env, SettlementError::InsufficientSwapBalance);
+        }
+        let expiration_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(1)
+            .unwrap_or_else(|| panic_with_error!(&env, SettlementError::InvalidSwapParameters));
+
+        input_token.approve(&current_contract, &router, &amount, &expiration_ledger);
+
+        let amount_out: i128 = env.invoke_contract(
+            &router,
+            &soroban_sdk::Symbol::new(&env, "swap_exact_tokens_for_tokens"),
+            soroban_sdk::vec![
+                &env,
+                current_contract.into_val(&env),
+                from_token.into_val(&env),
+                to_token.into_val(&env),
+                recipient.into_val(&env),
+                amount.into_val(&env),
+                min_amount_out.into_val(&env),
+                deadline.into_val(&env),
+            ],
+        );
+        if amount_out < min_amount_out {
+            panic_with_error!(&env, SettlementError::SwapOutputBelowMinimum);
+        }
+        if input_token.balance(&current_contract) != balance_before - amount {
+            panic_with_error!(&env, SettlementError::SwapInputNotConsumed);
+        }
     }
 }
 

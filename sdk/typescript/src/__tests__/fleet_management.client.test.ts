@@ -113,15 +113,19 @@ describe('FleetManagementClient.getIdentityContract (Issue #486)', () => {
   it('set+get round-trip for both escrow and identity contracts', async () => {
     const call = mockInvoker({
       set_escrow_contract: [nativeToScVal(null)],
+      confirm_escrow_contract: [nativeToScVal(null)],
       get_escrow_contract: [nativeToScVal(ESCROW_ADDR, { type: 'address' })],
       set_identity_contract: [nativeToScVal(null)],
+      confirm_identity_contract: [nativeToScVal(null)],
       get_identity_contract: [nativeToScVal(IDENTITY_ADDR, { type: 'address' })],
     });
 
     const fleetClient = client();
     await fleetClient.setEscrowContract({ admin: ADMIN, escrowContract: ESCROW_ADDR });
+    await fleetClient.confirmEscrowContract();
     const readEscrow = await fleetClient.getEscrowContract();
     await fleetClient.setIdentityContract({ admin: ADMIN, identityContract: IDENTITY_ADDR });
+    await fleetClient.confirmIdentityContract();
     const readIdentity = await fleetClient.getIdentityContract();
 
     expect(readEscrow).toBe(ESCROW_ADDR);
@@ -130,8 +134,10 @@ describe('FleetManagementClient.getIdentityContract (Issue #486)', () => {
     const fns = call.mock.calls.map((c) => c[0]);
     expect(fns).toEqual([
       'set_escrow_contract',
+      'confirm_escrow_contract',
       'get_escrow_contract',
       'set_identity_contract',
+      'confirm_identity_contract',
       'get_identity_contract',
     ]);
   });
@@ -168,7 +174,7 @@ describe('FleetManagementClient set_escrow_contract event (Issue #487)', () => {
   it('propagates a contract error from set_escrow_contract to the caller', async () => {
     jest
       .spyOn(ContractInvoker.prototype, 'call')
-      .mockRejectedValue(new Error('Soroban simulation failed: FleetError::Unauthorized'));
+      .mockRejectedValue(new Error('Soroban simulation failed: FaniLabError::Unauthorized'));
 
     await expect(
       client().setEscrowContract({ admin: ADMIN, escrowContract: ESCROW_ADDR }),
@@ -199,7 +205,7 @@ describe('FleetManagementClient set_identity_contract event (Issue #487)', () =>
   it('propagates a contract error from set_identity_contract to the caller', async () => {
     jest
       .spyOn(ContractInvoker.prototype, 'call')
-      .mockRejectedValue(new Error('Soroban simulation failed: FleetError::Unauthorized'));
+      .mockRejectedValue(new Error('Soroban simulation failed: FaniLabError::Unauthorized'));
 
     await expect(
       client().setIdentityContract({ admin: ADMIN, identityContract: IDENTITY_ADDR }),
@@ -233,5 +239,20 @@ describe('FleetManagementClient set_identity_contract event (Issue #487)', () =>
     // Second call: set_identity_contract(admin, identityAddr)
     expect(decodeAddress(call.mock.calls[1][1][0] as xdr.ScVal)).toBe(ADMIN);
     expect(decodeAddress(call.mock.calls[1][1][1] as xdr.ScVal)).toBe(IDENTITY_ADDR);
+  });
+});
+
+describe('FleetManagementClient.reactivateFleet', () => {
+  it('calls reactivate_fleet with caller and fleet ID', async () => {
+    const call = mockInvoker({ reactivate_fleet: [nativeToScVal(null)] });
+
+    await client().reactivateFleet({ caller: ADMIN, fleetId: 42n });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    const [fn, args] = call.mock.calls[0];
+    expect(fn).toBe('reactivate_fleet');
+    expect(args).toHaveLength(2);
+    expect(decodeAddress(args[0] as xdr.ScVal)).toBe(ADMIN);
+    expect(scValToNative(args[1] as xdr.ScVal)).toBe(42n);
   });
 });

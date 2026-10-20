@@ -43,6 +43,10 @@ export class IdentityReputationClient {
     await this.invoker.call('set_delivery_contract', [address(params.admin), address(params.deliveryContract)], options);
   }
 
+  async confirmDeliveryContract(options?: ContractInvokeOptions): Promise<void> {
+    await this.invoker.call('confirm_delivery_contract', [], options);
+  }
+
   async setDisputeContract(params: IdentityReputationTypes.SetDisputeContractParams, options?: ContractInvokeOptions): Promise<void> {
     await this.invoker.call('set_dispute_contract', [address(params.admin), address(params.disputeContract)], options);
   }
@@ -63,8 +67,8 @@ export class IdentityReputationClient {
     return Boolean(await this.invoker.call('has_driver_profile', [address(driver)], options));
   }
 
-  async registerDriver(driver: string, options?: ContractInvokeOptions): Promise<void> {
-    await this.invoker.call('register_driver', [address(driver)], options);
+  async registerDriver(driver: string, options?: ContractInvokeOptions): Promise<DriverProfile> {
+    return decodeDriverProfile(await this.invoker.call('register_driver', [address(driver)], options));
   }
 
   async registerUser(user: string, options?: ContractInvokeOptions): Promise<UserProfile> {

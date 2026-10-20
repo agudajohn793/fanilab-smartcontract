@@ -3,7 +3,7 @@
 use shared_types::{
     events, ttl, DeliveryId, DeliveryStatus, DisputeRaisedEvent, DisputeResolvedPayoutEvent,
     DisputeResolvedRefundEvent, DisputeResolvedSplitEvent, EscrowRecord, EscrowStatus,
-    FaniLabError, HIGH_VALUE_DISPUTE_THRESHOLD,
+    FaniLabError, PendingPeerContractChange,
 };
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, Address, BytesN, Env, IntoVal, Symbol,
@@ -135,6 +135,8 @@ pub enum DataKey {
     PendingAdminRemove(Address),
     DeliveryContract,
     EscrowContract,
+    PendingDeliveryContract,
+    PendingEscrowContract,
     IdentityReputationContract,
     DisputeTimeLimit,
     DisputeResolutionLimit,
@@ -423,7 +425,24 @@ impl DisputeResolutionContract {
             .get(&DataKey::AdminList)
             .unwrap_or_else(|| Vec::new(&env));
 
-        if !Self::is_admin(env.clone(), old_admin.clone()) || admin_list.len() <= 1 {
+        let mut new_list = Vec::new(&env);
+        for admin in admin_list.iter() {
+            if admin != old_admin {
+                new_list.push_back(admin);
+            }
+        }
+
+        // The target must actually be on the roster.  Without this guard,
+        // removing a non-member would filter nothing out, rewrite the
+        // unchanged list, drop a DataKey::Admin flag that was never set, and
+        // publish an `admin_removed` event for a removal that never happened.
+        if new_list.len() == admin_list.len() {
+            panic_with_error!(&env, FaniLabError::InvalidState);
+        }
+
+        // Removing the last admin would permanently brick governance — no one
+        // would be left who could call add_admin to recover.
+        if new_list.is_empty() {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 
@@ -497,7 +516,8 @@ impl DisputeResolutionContract {
             .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized))
     }
 
-    /// Repoint the delivery contract this contract escalates to (Issue #438).
+    /// Propose a new delivery contract address. It takes effect after a
+    /// three-day review period and separate confirmation (Issue #438).
     ///
     /// Without this setter the address supplied to `init` was frozen for the
     /// lifetime of the deployment: any upgrade of the delivery contract forced
@@ -510,33 +530,98 @@ impl DisputeResolutionContract {
         if !Self::is_admin(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingDeliveryContract,
+            &PendingPeerContractChange {
+                address: delivery_contract.clone(),
+                proposed_by: caller.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .set(&DataKey::DeliveryContract, &delivery_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382 precedent: emit an event so off-chain indexers can track when
-        // this contract pointer is updated by an admin.
+        // this contract pointer is proposed by an admin.
         env.events().publish(
-            (Symbol::new(&env, "delivery_contract_set"),),
-            (caller, delivery_contract),
+            (Symbol::new(&env, "delivery_contract_change_proposed"),),
+            (caller, delivery_contract, activates_at),
         );
     }
 
-    /// Repoint the escrow contract this contract freezes funds in and resolves
-    /// disputes against. Admin-only, for the same reasons and with the same
-    /// rationale as `set_delivery_contract` (Issue #438).
+    pub fn confirm_delivery_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, FaniLabError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::DeliveryContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingDeliveryContract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "delivery_contract_set"),),
+            (pending.proposed_by, pending.address),
+        );
+    }
+
+    pub fn get_pending_delivery_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingDeliveryContract)
+    }
+
+    /// Propose an escrow contract address. The address takes effect after a
+    /// three-day review period and separate confirmation.
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
     pub fn set_escrow_contract(env: Env, caller: Address, escrow_contract: Address) {
         caller.require_auth();
         if !Self::is_admin(env.clone(), caller.clone()) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: escrow_contract.clone(),
+                proposed_by: caller.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .set(&DataKey::EscrowContract, &escrow_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "escrow_contract_set"),),
-            (caller, escrow_contract),
+            (pending.proposed_by, pending.address),
         );
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
@@ -552,6 +637,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &reputation_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // #382: emit event so off-chain indexers can track when this critical
         // contract pointer is updated by an admin.
         env.events().publish(
@@ -590,6 +678,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_penalty_updated"),),
             (caller, old_penalty, penalty),
@@ -621,6 +712,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeReputationReward, &reward);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_reward_updated"),),
             (caller, old_reward, reward),
@@ -651,6 +745,9 @@ impl DisputeResolutionContract {
         env.storage()
             .instance()
             .set(&DataKey::DisputeSplitPenalty, &penalty);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "dispute_split_penalty_updated"),),
             (caller, old_penalty, penalty),
@@ -1034,7 +1131,15 @@ impl DisputeResolutionContract {
         // sender_amount > record.amount, draining the protocol's pooled
         // balance into the sender address. Fail fast in the dispute contract
         // so the escrow state is never touched when the input is invalid.
-        if sender_share_bps > 10000 {
+        //
+        // The endpoints 0 and 10000 are rejected as well: a 0% sender share
+        // pays everything to the driver (identical to
+        // `resolve_dispute_pay_driver`) and a 100% sender share refunds
+        // everything to the sender (identical to
+        // `resolve_dispute_refund_sender`), yet routing them through split
+        // would still apply the split reputation penalty to the driver.
+        // Callers must use the dedicated entry point for those outcomes.
+        if sender_share_bps == 0 || sender_share_bps >= 10000 {
             panic_with_error!(&env, FaniLabError::InvalidState);
         }
 

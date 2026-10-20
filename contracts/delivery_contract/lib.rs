@@ -4,6 +4,7 @@ use shared_types::FaniLabError;
 use shared_types::{
     delivery_key, events, is_admin, ttl, DeliveryConfirmedEvent, DeliveryCreatedEvent,
     DeliveryDisputedEvent, DeliveryMetadata, DriverAssignedEvent, DriverProfile, StorageKey,
+    PendingPeerContractChange,
 };
 pub use shared_types::{DeliveryId, DeliveryRecord, DeliveryStatus};
 use soroban_sdk::{
@@ -71,6 +72,7 @@ pub enum DataKey {
     /// Added in Issue #444 so `raise_dispute` can be gated on the real caller
     /// instead of trusting a self-declared `caller` argument.
     DisputeResolutionContract,
+    PendingEscrowContract,
     /// When `true`, `assign_driver` requires the driver to have
     /// `kyc_verified = true` in the identity contract before assignment is
     /// permitted.  Defaults to `false` so existing deployments and test
@@ -110,7 +112,6 @@ fn index_page(env: &Env, owner: Address, kind: u32, offset: u32, limit: u32) -> 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum DeliveryError {
-    InvalidState = 1,
     InvalidMetadata = 2,
     /// A batch operation (e.g. create_deliveries_batch) exceeded MAX_BATCH_SIZE.
     BatchTooLarge = 3,
@@ -124,11 +125,12 @@ pub enum DeliveryError {
     /// `Locked` state, at a point where funded escrow is a precondition
     /// (currently: the `Active -> InTransit` transition). See Issue #298.
     EscrowNotLocked = 6,
+    InvalidIndexKind = 7,
 }
 
 mod constants {
+    pub const MIN_LOCATION_LEN: u32 = 2;
     pub const MAX_LOCATION_LEN: u32 = 256;
-    pub const MAX_WEIGHT_GRAMS: u32 = 1_000_000;
 }
 
 /// Validate whether a status transition is permitted by the delivery state machine.
@@ -171,15 +173,20 @@ fn validate_delivery_metadata(
     _env: &Env,
     metadata: &DeliveryMetadata,
 ) -> Result<(), DeliveryError> {
-    if metadata.origin.is_empty() || metadata.origin.len() > constants::MAX_LOCATION_LEN {
-        return Err(DeliveryError::InvalidMetadata);
-    }
-    if metadata.destination.is_empty() || metadata.destination.len() > constants::MAX_LOCATION_LEN {
-        return Err(DeliveryError::InvalidMetadata);
-    }
-    if metadata.cargo_description.weight_grams == 0
-        || metadata.cargo_description.weight_grams > constants::MAX_WEIGHT_GRAMS
+    if metadata.origin.len() < constants::MIN_LOCATION_LEN
+        || metadata.origin.len() > constants::MAX_LOCATION_LEN
     {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    if metadata.destination.len() < constants::MIN_LOCATION_LEN
+        || metadata.destination.len() > constants::MAX_LOCATION_LEN
+    {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    if metadata.origin == metadata.destination {
+        return Err(DeliveryError::InvalidMetadata);
+    }
+    if !metadata.cargo_description.has_valid_weight() {
         return Err(DeliveryError::InvalidMetadata);
     }
     Ok(())
@@ -215,6 +222,7 @@ impl DeliveryContract {
         );
     }
 
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 28 but remains functional
     pub fn set_identity_reputation_contract(env: Env, admin: Address, identity_contract: Address) {
         admin.require_auth();
         let stored_admin: Address = env
@@ -228,6 +236,13 @@ impl DeliveryContract {
         env.storage()
             .instance()
             .set(&DataKey::IdentityReputationContract, &identity_contract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (events::identity_reputation_contract_updated(&env),),
+            (admin, identity_contract),
+        );
     }
 
     /// Configure the `dispute_resolution_contract` that is the only caller
@@ -266,6 +281,10 @@ impl DeliveryContract {
             .get(&DataKey::DisputeResolutionContract)
     }
 
+    /// Propose an escrow contract address for this delivery contract's
+    /// escrow-backed operations. Changes require a three-day review period
+    /// followed by separate confirmation.
+    ///
     /// Update the escrow contract this delivery contract cross-calls for every
     /// escrow-backed operation (funding, refunds, releases, disputes).
     ///
@@ -279,17 +298,56 @@ impl DeliveryContract {
         if !is_admin(&env, &admin) {
             panic_with_error!(&env, FaniLabError::Unauthorized);
         }
-        env.storage()
-            .instance()
-            .set(&DataKey::EscrowContract, &escrow_contract);
+        let activates_at = env
+            .ledger()
+            .timestamp()
+            .saturating_add(shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS);
+        env.storage().instance().set(
+            &DataKey::PendingEscrowContract,
+            &PendingPeerContractChange {
+                address: escrow_contract.clone(),
+                proposed_by: admin.clone(),
+                activates_at,
+            },
+        );
         env.storage()
             .instance()
             .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
+        env.events().publish(
+            (Symbol::new(&env, "escrow_contract_change_proposed"),),
+            (admin, escrow_contract, activates_at),
+        );
+    }
 
+    #[allow(deprecated)]
+    pub fn confirm_escrow_contract(env: Env) {
+        let pending: PendingPeerContractChange = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, DeliveryError::NoPendingContractChange));
+        if env.ledger().timestamp() < pending.activates_at {
+            panic_with_error!(&env, DeliveryError::ContractChangeTimelockNotElapsed);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::EscrowContract, &pending.address);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingEscrowContract);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         // Emit audit event so off-chain monitors can detect escrow rotations
         // (Issue #540).
         env.events()
-            .publish((events::delivery_contract_updated(&env),), (admin, escrow_contract));
+            .publish((events::delivery_contract_updated(&env),), (pending.proposed_by, pending.address));
+    }
+
+    pub fn get_pending_escrow_contract(env: Env) -> Option<PendingPeerContractChange> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingEscrowContract)
     }
 
     pub fn get_identity_reputation_contract(env: Env) -> Option<Address> {
@@ -329,6 +387,9 @@ impl DeliveryContract {
         env.storage()
             .instance()
             .set(&DataKey::RequireKyc, &required);
+        env.storage()
+            .instance()
+            .extend_ttl(ttl::LEDGER_TTL_THRESHOLD, ttl::LEDGER_TTL_EXTEND_TO);
         env.events().publish(
             (Symbol::new(&env, "require_kyc_updated"),),
             (admin, required),
@@ -795,18 +856,15 @@ impl DeliveryContract {
             _ => panic_with_error!(&env, FaniLabError::Unauthorized),
         }
 
-        let identity_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::IdentityReputationContract)
-            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
-        let is_suspended: bool = env.invoke_contract(
-            &identity_contract,
-            &Symbol::new(&env, "is_driver_suspended"),
-            soroban_sdk::vec![&env, driver.into_val(&env)],
-        );
-        if is_suspended {
-            panic_with_error!(&env, FaniLabError::Unauthorized);
+        if let Some(identity_contract) = Self::get_identity_reputation_contract(env.clone()) {
+            let is_suspended: bool = env.invoke_contract(
+                &identity_contract,
+                &Symbol::new(&env, "is_driver_suspended"),
+                soroban_sdk::vec![&env, driver.into_val(&env)],
+            );
+            if is_suspended {
+                panic_with_error!(&env, FaniLabError::Unauthorized);
+            }
         }
 
         validate_transition(delivery.status, DeliveryStatus::InTransit)
@@ -1005,6 +1063,61 @@ impl DeliveryContract {
         );
     }
 
+    /// Synchronize an administrator-initiated escrow freeze with this delivery.
+    ///
+    /// Only the configured escrow contract may call this endpoint; it invokes
+    /// the method after authenticating the admin and freezing the escrow.
+    #[allow(deprecated)] // events().publish() is deprecated in SDK 27.0.0 but still functional; tracked in SOROBAN_SDK_27_MIGRATION.md#event-system-migration (Issue #114)
+    pub fn sync_dispute_from_escrow(
+        env: Env,
+        caller: Address,
+        reporter: Address,
+        delivery_id: DeliveryId,
+    ) {
+        caller.require_auth();
+        let escrow_contract: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::EscrowContract)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::NotInitialized));
+        if caller != escrow_contract {
+            panic_with_error!(&env, FaniLabError::Unauthorized);
+        }
+
+        let key = delivery_key(delivery_id);
+        let mut delivery: DeliveryRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic_with_error!(&env, FaniLabError::DeliveryNotFound));
+
+        match delivery.status {
+            DeliveryStatus::Pending
+            | DeliveryStatus::Active
+            | DeliveryStatus::InTransit
+            | DeliveryStatus::Delivered => {}
+            DeliveryStatus::Disputed => return,
+            _ => panic_with_error!(&env, FaniLabError::InvalidState),
+        }
+
+        let timestamp = env.ledger().timestamp();
+        delivery.status = DeliveryStatus::Disputed;
+        env.storage().persistent().set(&key, &delivery);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ttl::LEDGER_TTL_THRESHOLD,
+            ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.events().publish(
+            (events::delivery_disputed(&env),),
+            DeliveryDisputedEvent {
+                delivery_id: delivery_id.value(),
+                reporter,
+                timestamp,
+            },
+        );
+    }
+
     /// Transitions a delivery from `DeliveryStatus::Disputed` to `DeliveryStatus::Resolved`.
     ///
     /// **Authorization:** the configured `dispute_resolution_contract` only (Issue #447).
@@ -1121,6 +1234,15 @@ impl DeliveryContract {
     /// Validates that delivery and escrow states match expected protocol invariants.
     /// Returns true if states are synchronized, false if a mismatch is detected.
     fn validate_state_sync(delivery: &DeliveryRecord, escrow: &shared_types::EscrowRecord) -> bool {
+        if delivery.sender != escrow.sender || delivery.recipient != escrow.recipient {
+            return false;
+        }
+        if let Some(driver) = &delivery.driver {
+            if driver != &escrow.driver {
+                return false;
+            }
+        }
+
         match (&delivery.status, &escrow.status) {
             // Pending/Active: escrow should be Locked
             (DeliveryStatus::Pending, shared_types::EscrowStatus::Locked) => true,
@@ -1173,6 +1295,9 @@ impl DeliveryContract {
 
     #[rustfmt::skip]
     pub fn get_deliveries_page(env: Env, owner: Address, kind: u32, offset: u32, limit: u32) -> soroban_sdk::Vec<DeliveryId> {
+        if kind > 2 {
+            panic_with_error!(&env, DeliveryError::InvalidIndexKind);
+        }
         index_page(&env, owner, kind, offset, limit)
     }
 
