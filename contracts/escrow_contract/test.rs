@@ -2,9 +2,9 @@ extern crate std;
 
 use super::*;
 use proptest::prelude::*;
-use shared_types::{DeliveryId, EscrowReleasedEvent, FaniLabError};
+use shared_types::{DeliveryId, EscrowFundedEvent, EscrowReleasedEvent, FaniLabError};
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Deployer as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     xdr, Address, Env, IntoVal, TryFromVal, TryIntoVal, Val,
 };
@@ -421,9 +421,35 @@ fn test_create_escrow_duplicate_delivery_rejected() {
 
     let result = client.try_create_escrow(&sender, &recipient, &driver, &2u64, &token, &500, &None);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::DuplicateDelivery.into()),
-        _ => panic!("Expected EscrowError::DuplicateDelivery"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::DuplicateDelivery.into()),
+        _ => panic!("Expected FaniLabError::DuplicateDelivery"),
     }
+}
+
+#[test]
+fn test_create_escrow_emits_typed_funded_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &sender, 1000);
+    client.create_escrow(&sender, &recipient, &driver, &10u64, &token, &1000, &None);
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, events::escrow_funded(&env));
+    let funded: EscrowFundedEvent =
+        EscrowFundedEvent::try_from_val(&env, &data).expect("invalid escrow_funded payload");
+    assert_eq!(funded.delivery_id, 10);
+    assert_eq!(funded.sender, sender);
+    assert_eq!(funded.token, token);
+    assert_eq!(funded.amount, 1000);
 }
 
 #[test]
@@ -601,8 +627,8 @@ fn test_release_from_paused_state_rejected_with_invalid_state() {
 
     let result = client.try_release_escrow(&admin, &8u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 }
 
@@ -626,8 +652,8 @@ fn test_refund_on_released_escrow_rejected_with_invalid_state() {
 
     let result = client.try_refund_escrow(&admin, &9u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 }
 
@@ -661,8 +687,8 @@ fn test_insufficient_funds_guard_on_release() {
 
     let result = client.try_release_escrow(&admin, &10u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InsufficientFunds.into()),
-        _ => panic!("Expected EscrowError::InsufficientFunds"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InsufficientFunds.into()),
+        _ => panic!("Expected FaniLabError::InsufficientFunds"),
     }
 }
 
@@ -730,8 +756,8 @@ fn test_resolve_dispute_refund_with_insufficient_funds() {
 
     let result = client.try_resolve_dispute(&admin, &11u64, &false);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InsufficientFunds.into()),
-        _ => panic!("Expected EscrowError::InsufficientFunds"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InsufficientFunds.into()),
+        _ => panic!("Expected FaniLabError::InsufficientFunds"),
     }
 }
 
@@ -887,7 +913,7 @@ fn test_get_escrow_not_found() {
 
     let result = client.try_get_escrow(&999u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::DeliveryNotFound.into()),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::DeliveryNotFound.into()),
         _ => panic!("Expected DeliveryNotFound"),
     }
 }
@@ -1024,6 +1050,27 @@ fn test_update_slippage_tolerance() {
     assert_eq!(client.get_slippage_tolerance(), 1000);
 }
 
+#[test]
+fn test_update_slippage_tolerance_rejects_values_above_maximum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    let result = client.try_update_slippage_tolerance(
+        &admin,
+        &(constants::MAX_SLIPPAGE_TOLERANCE_BPS + 1),
+    );
+
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidSlippageTolerance.into()),
+        _ => panic!("Expected EscrowError::InvalidSlippageTolerance"),
+    }
+    assert_eq!(client.get_slippage_tolerance(), 500);
+}
+
 /// Issue #469 — the setter must publish `slippage_tolerance_updated` with the
 /// old and new bps so indexers can track slippage-constraint history.
 #[test]
@@ -1126,8 +1173,8 @@ fn test_cannot_reclaim_non_expired_escrow() {
 
     let result = client.try_reclaim_expired_escrow(&202u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 }
 
@@ -1154,8 +1201,8 @@ fn test_cannot_reclaim_released_escrow() {
 
     let result = client.try_reclaim_expired_escrow(&203u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 }
 
@@ -1383,6 +1430,44 @@ fn test_sweep_untracked_balance_unauthorized_rejected() {
     }
 }
 
+#[test]
+fn test_sweep_untracked_balance_rejects_contract_as_recipient() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    let result = client.try_sweep_untracked_balance(&admin, &token, &contract_id);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for self-transfer"),
+    }
+}
+
+#[test]
+fn test_sweep_untracked_balance_extends_instance_ttl() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+    mint(&env, &token, &contract_id, 100);
+
+    env.ledger().with_mut(|ledger| {
+        ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    client.sweep_untracked_balance(&admin, &token, &Address::generate(&env));
+
+    let remaining_ttl = env.deployer().get_contract_instance_ttl(&contract_id);
+    assert!(
+        remaining_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+        "sweep_untracked_balance must extend instance TTL (got {remaining_ttl})"
+    );
+}
+
 // ── Issue #90: clear_settlement_contract tests ──────────────────────────────
 
 #[test]
@@ -1404,6 +1489,26 @@ fn test_clear_settlement_contract_reverts_to_none() {
 
     client.clear_settlement_contract(&admin);
     assert_eq!(client.get_settlement_contract(), None);
+}
+
+#[test]
+fn test_clear_settlement_contract_emits_audit_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    client.clear_settlement_contract(&admin);
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, Symbol::new(&env, "settlement_contract_cleared"));
+    assert_eq!(
+        data,
+        (admin, env.ledger().timestamp()).into_val(&env)
+    );
 }
 
 #[test]
@@ -1448,8 +1553,8 @@ fn test_confirm_settlement_contract_before_timelock_rejected() {
 
     let result = client.try_confirm_settlement_contract(&admin);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::TimelockNotElapsed.into()),
-        _ => panic!("Expected EscrowError::TimelockNotElapsed"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::TimelockNotElapsed.into()),
+        _ => panic!("Expected FaniLabError::TimelockNotElapsed"),
     }
 }
 
@@ -1600,6 +1705,80 @@ fn test_propose_admin_sets_pending_admin() {
     client.propose_admin(&admin, &new_admin);
 
     assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_propose_admin_emits_event_and_admin_can_cancel_proposal() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let new_admin = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.propose_admin(&admin, &new_admin);
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, events::admin_proposed(&env));
+    let payload: (Address, Address) =
+        <(Address, Address)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload, (admin.clone(), new_admin.clone()));
+
+    client.cancel_admin_proposal(&admin);
+    assert_eq!(client.get_admin(), admin);
+    match client.try_accept_admin(&new_admin) {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState after cancelling the proposal"),
+    }
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, events::admin_proposal_cancelled(&env));
+    let payload: (Address, Address) =
+        <(Address, Address)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(payload, (admin, new_admin));
+}
+
+#[test]
+fn test_cancel_admin_proposal_rejects_non_admin() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    let new_admin = Address::generate(&env);
+
+    client.init(&admin, &token, &0);
+    client.propose_admin(&admin, &new_admin);
+
+    match client.try_cancel_admin_proposal(&attacker) {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized for non-admin cancellation"),
+    }
+
+    client.accept_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_cancel_admin_proposal_requires_pending_nomination() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    match client.try_cancel_admin_proposal(&admin) {
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState when no proposal is pending"),
+    }
 }
 
 #[test]
@@ -2827,8 +3006,8 @@ fn test_double_release_prevented_by_state_check() {
 
     let result = client.try_release_escrow(&admin, &505u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState on double-release attempt"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState on double-release attempt"),
     }
 
     assert_eq!(balance(&env, &token, &driver), 2000);
@@ -2869,8 +3048,8 @@ fn test_cannot_release_already_refunded_escrow() {
 
     let result = client.try_release_escrow(&admin, &506u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 
     assert_eq!(balance(&env, &token, &sender), 2000);
@@ -3370,7 +3549,7 @@ fn test_batch_invalid_element_leaves_no_partial_state() {
     for delivery_id in [400u64, 401u64, 402u64] {
         let result = client.try_get_escrow(&delivery_id);
         match result {
-            Err(Ok(err)) => assert_eq!(err, EscrowError::DeliveryNotFound.into()),
+            Err(Ok(err)) => assert_eq!(err, FaniLabError::DeliveryNotFound.into()),
             _ => panic!("Expected DeliveryNotFound for delivery {delivery_id}"),
         }
     }
@@ -4036,8 +4215,8 @@ fn test_resolve_dispute_release_with_insufficient_funds() {
 
     let result = client.try_resolve_dispute(&admin, &194u64, &true);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InsufficientFunds.into()),
-        _ => panic!("Expected EscrowError::InsufficientFunds"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InsufficientFunds.into()),
+        _ => panic!("Expected FaniLabError::InsufficientFunds"),
     }
     // State must not have been mutated; escrow remains Paused.
     assert_eq!(client.get_escrow(&194u64).status, EscrowStatus::Paused);
@@ -4227,8 +4406,8 @@ fn test_raise_dispute_rejects_terminal_states() {
     let dispute = new_dispute_contract(&env, &client, &admin);
     let result = client.try_raise_dispute(&dispute, &935u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Released"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Released"),
     }
 
     // Refunded state
@@ -4237,8 +4416,8 @@ fn test_raise_dispute_rejects_terminal_states() {
     client.refund_escrow(&sender, &936u64);
     let result = client.try_raise_dispute(&dispute, &936u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Refunded"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Refunded"),
     }
 
     // Split state
@@ -4248,8 +4427,8 @@ fn test_raise_dispute_rejects_terminal_states() {
     client.resolve_dispute_split(&admin, &937u64, &5000);
     let result = client.try_raise_dispute(&dispute, &937u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Split"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Split"),
     }
 }
 
@@ -4760,6 +4939,26 @@ fn test_clear_fleet_management_contract_reverts_to_none() {
 
     client.clear_fleet_management_contract(&admin);
     assert_eq!(client.get_fleet_management_contract(), None);
+}
+
+#[test]
+fn test_clear_fleet_management_contract_emits_audit_event() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    client.clear_fleet_management_contract(&admin);
+
+    let (topics, data) = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &topics.get(0).unwrap()).unwrap();
+    assert_eq!(topic, Symbol::new(&env, "fleet_management_contract_cleared"));
+    assert_eq!(
+        data,
+        (admin, env.ledger().timestamp()).into_val(&env)
+    );
 }
 
 #[test]
@@ -5332,7 +5531,7 @@ fn test_existing_instance_writers_still_extend_ttl() {
 // ── Issue #294: freeze_funds terminal-state regression tests ─────────────────
 //
 // Acceptance criteria (issue #294):
-//   • freeze_funds rejects Released, Refunded, Split with EscrowError::InvalidState
+//   • freeze_funds rejects Released, Refunded, Split with FaniLabError::InvalidState
 //   • Already-Paused is a safe no-op (documented decision)
 //   • Freezing Locked / Holdback still works as before
 //
@@ -5340,7 +5539,7 @@ fn test_existing_instance_writers_still_extend_ttl() {
 // and test_freeze_funds_unauthorized_caller_rejected) are the originals and remain
 // unchanged above.
 
-/// freeze_funds on a Released escrow → typed EscrowError::InvalidState.
+/// freeze_funds on a Released escrow → typed FaniLabError::InvalidState.
 /// Without the fix this would silently succeed (return ()) instead.
 #[test]
 fn test_freeze_funds_rejects_released_escrow() {
@@ -5365,14 +5564,14 @@ fn test_freeze_funds_rejects_released_escrow() {
 
     let result = client.try_freeze_funds(&dispute_contract, &2940u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Released escrow"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Released escrow"),
     }
     // State must not have changed
     assert_eq!(client.get_escrow(&2940u64).status, EscrowStatus::Released);
 }
 
-/// freeze_funds on a Refunded escrow → typed EscrowError::InvalidState.
+/// freeze_funds on a Refunded escrow → typed FaniLabError::InvalidState.
 #[test]
 fn test_freeze_funds_rejects_refunded_escrow() {
     let (env, contract_id) = setup_env();
@@ -5396,13 +5595,13 @@ fn test_freeze_funds_rejects_refunded_escrow() {
 
     let result = client.try_freeze_funds(&dispute_contract, &2941u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Refunded escrow"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Refunded escrow"),
     }
     assert_eq!(client.get_escrow(&2941u64).status, EscrowStatus::Refunded);
 }
 
-/// freeze_funds on a Split escrow → typed EscrowError::InvalidState.
+/// freeze_funds on a Split escrow → typed FaniLabError::InvalidState.
 #[test]
 fn test_freeze_funds_rejects_split_escrow() {
     let (env, contract_id) = setup_env();
@@ -5427,8 +5626,8 @@ fn test_freeze_funds_rejects_split_escrow() {
 
     let result = client.try_freeze_funds(&dispute_contract, &2942u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for Split escrow"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for Split escrow"),
     }
     assert_eq!(client.get_escrow(&2942u64).status, EscrowStatus::Split);
 }
@@ -6069,8 +6268,8 @@ fn test_batch_duplicate_delivery_id_rejected() {
 
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &escrow_list);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::DuplicateDelivery.into()),
-        _ => panic!("Expected EscrowError::DuplicateDelivery for a batch with a duplicate ID"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::DuplicateDelivery.into()),
+        _ => panic!("Expected FaniLabError::DuplicateDelivery for a batch with a duplicate ID"),
     }
 }
 
@@ -6103,8 +6302,8 @@ fn test_batch_duplicate_delivery_id_across_batches_rejected() {
     second_batch.push_back((8001u64, driver.clone(), 1000i128, None)); // already exists
     let result = client.try_create_escrows_batch(&sender, &recipient, &token, &second_batch);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::DuplicateDelivery.into()),
-        _ => panic!("Expected EscrowError::DuplicateDelivery for a cross-batch duplicate"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::DuplicateDelivery.into()),
+        _ => panic!("Expected FaniLabError::DuplicateDelivery for a cross-batch duplicate"),
     }
 }
 
@@ -6342,6 +6541,53 @@ fn test_set_holdback_window_accepts_exact_minimum() {
     );
 }
 
+/// Exactly the maximum is accepted.
+#[test]
+fn test_set_holdback_window_accepts_exact_maximum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    client.set_holdback_window(&admin, &constants::MAX_HOLDBACK_WINDOW_SECONDS);
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::MAX_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
+/// A value above the maximum is rejected and leaves the configured window
+/// unchanged.
+#[test]
+fn test_set_holdback_window_rejects_above_maximum() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+    client.init(&admin, &token, &0);
+
+    client.set_holdback_window(&admin, &constants::MIN_HOLDBACK_WINDOW_SECONDS);
+    let result = client.try_set_holdback_window(
+        &admin,
+        &(constants::MAX_HOLDBACK_WINDOW_SECONDS + 1),
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
+        _ => panic!("Expected EscrowError::InvalidState for an above-maximum window"),
+    }
+
+    assert_eq!(
+        client.get_holdback_window(),
+        constants::MIN_HOLDBACK_WINDOW_SECONDS
+    );
+}
+
 /// One second below the minimum is rejected with `InvalidState` (code 5), and
 /// the previously configured window is left untouched.
 #[test]
@@ -6357,8 +6603,8 @@ fn test_set_holdback_window_rejects_below_minimum() {
     let result =
         client.try_set_holdback_window(&admin, &(constants::MIN_HOLDBACK_WINDOW_SECONDS - 1));
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for a below-minimum window"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for a below-minimum window"),
     }
 
     assert_eq!(
@@ -6380,8 +6626,8 @@ fn test_set_holdback_window_rejects_zero() {
 
     let result = client.try_set_holdback_window(&admin, &0u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for a zero window"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for a zero window"),
     }
 }
 
@@ -6420,8 +6666,8 @@ fn test_release_expired_holdback_rejected_before_timelock() {
 
     let result = client.try_release_expired_holdback(&9501u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::TimelockNotElapsed.into()),
-        _ => panic!("Expected EscrowError::TimelockNotElapsed before the window elapsed"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::TimelockNotElapsed.into()),
+        _ => panic!("Expected FaniLabError::TimelockNotElapsed before the window elapsed"),
     }
 
     assert_eq!(
@@ -6530,8 +6776,8 @@ fn test_release_expired_holdback_rejects_non_holdback_escrow() {
 
     let result = client.try_release_expired_holdback(&9505u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for a Locked escrow"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for a Locked escrow"),
     }
 
     assert_eq!(client.get_escrow(&9505u64).status, EscrowStatus::Locked);
@@ -6593,8 +6839,8 @@ fn test_release_expired_holdback_rejects_disputed_escrow() {
 
     let result = client.try_release_expired_holdback(&9508u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState for a Paused escrow"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState for a Paused escrow"),
     }
 }
 
@@ -6687,6 +6933,24 @@ fn default_persistent_ttl(env: &Env, contract_id: &Address) -> u32 {
         env.storage().persistent().set(&key, &1u32);
         env.storage().persistent().get_ttl(&key)
     })
+}
+
+#[test]
+fn test_volume_tiers_ttl_is_extended() {
+    let (env, contract_id) = setup_env();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token = setup_token(&env, &token_admin);
+
+    client.init(&admin, &token, &0);
+    client.set_volume_tiers(&admin, &soroban_sdk::Vec::new(&env));
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::VolumeTiers)
+    });
+    assert_eq!(ttl, EXPECTED_VOLUME_TTL);
+    assert!(ttl > default_persistent_ttl(&env, &contract_id));
 }
 
 #[test]
@@ -6906,32 +7170,68 @@ fn test_admin_freeze_funds_allowed_while_not_paused() {
 /// transition `freeze_funds` performs.
 #[test]
 fn test_admin_freeze_funds_on_holdback_escrow() {
-    let (env, contract_id) = setup_env();
-    let client = EscrowContractClient::new(&env, &contract_id);
+    let (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        _identity_addr,
+        _token,
+        admin,
+        _sender,
+        _recipient,
+        _driver,
+    ) = setup_wired_protocol(1000);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_addr);
+    let client = EscrowContractClient::new(&env, &escrow_addr);
 
-    let admin = Address::generate(&env);
-    let sender = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let driver = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    let token = setup_token(&env, &token_admin);
+    let key = shared_types::delivery_key(delivery_id);
+    env.as_contract(&delivery_addr, || {
+        let mut record: shared_types::DeliveryRecord =
+            env.storage().persistent().get(&key).unwrap();
+        record.status = delivery_contract::DeliveryStatus::Delivered;
+        env.storage().persistent().set(&key, &record);
+    });
+    client.mark_holdback_escrow(&delivery_addr, &u64::from(delivery_id));
+    client.admin_freeze_funds(&admin, &u64::from(delivery_id));
 
-    client.init(&admin, &token, &0);
-    mint(&env, &token, &sender, 1000);
-    let delivery_contract = Address::generate(&env);
-    client.create_escrow(
-        &sender, &recipient, &driver, &10402u64, &token, &1000, &None,
+    let record = client.get_escrow(&u64::from(delivery_id));
+    assert_eq!(record.status, EscrowStatus::Paused);
+    assert_eq!(record.disputed_by, Some(admin.clone()));
+    assert_eq!(
+        delivery_client.get_delivery(&delivery_id).status,
+        delivery_contract::DeliveryStatus::Disputed
     );
-    client.set_delivery_contract(&admin, &delivery_contract);
-    env.ledger().set_timestamp(
-        env.ledger().timestamp() + shared_types::PEER_CONTRACT_CHANGE_TIMELOCK_SECONDS,
+}
+
+#[test]
+fn test_admin_freeze_funds_synchronizes_delivery_and_records_admin() {
+    let (
+        env,
+        delivery_id,
+        delivery_addr,
+        escrow_addr,
+        _dispute_addr,
+        _identity_addr,
+        _token,
+        admin,
+        _sender,
+        _recipient,
+        _driver,
+    ) = setup_wired_protocol(1000);
+    let delivery_client = delivery_contract::DeliveryContractClient::new(&env, &delivery_addr);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_addr);
+
+    escrow_client.admin_freeze_funds(&admin, &u64::from(delivery_id));
+
+    let record = escrow_client.get_escrow(&u64::from(delivery_id));
+    assert_eq!(record.status, EscrowStatus::Paused);
+    assert_eq!(record.disputed_by, Some(admin));
+    assert_eq!(
+        delivery_client.get_delivery(&delivery_id).status,
+        delivery_contract::DeliveryStatus::Disputed
     );
-    client.confirm_delivery_contract();
-    client.mark_holdback_escrow(&delivery_contract, &10402u64);
-
-    client.admin_freeze_funds(&admin, &10402u64);
-
-    assert_eq!(client.get_escrow(&10402u64).status, EscrowStatus::Paused);
 }
 
 /// Only the protocol admin may use the admin override; the sender, recipient and
@@ -6988,8 +7288,8 @@ fn test_admin_freeze_funds_rejects_terminal_state() {
 
     let result = client.try_admin_freeze_funds(&admin, &10404u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, EscrowError::InvalidState.into()),
-        _ => panic!("Expected EscrowError::InvalidState"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::InvalidState.into()),
+        _ => panic!("Expected FaniLabError::InvalidState"),
     }
 }
 

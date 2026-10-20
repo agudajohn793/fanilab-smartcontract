@@ -62,9 +62,9 @@ the escrow into `Paused`, the driver's funds would otherwise sit in
 **anyone** may call `release_expired_holdback(delivery_id)` to settle the
 escrow to the driver (minus the platform fee), reusing the same settlement
 logic as `release_holdback_escrow`. Calling it before the window elapses
-reverts with `EscrowError::TimelockNotElapsed`; calling it on anything other
+reverts with `FaniLabError::TimelockNotElapsed`; calling it on anything other
 than a `Holdback` escrow (including a `Paused`/frozen one) reverts with
-`EscrowError::InvalidState` — a frozen escrow is unaffected by the holdback
+`FaniLabError::InvalidState` — a frozen escrow is unaffected by the holdback
 window and remains on the admin-arbitration path.
 
 The window defaults to `DEFAULT_HOLDBACK_WINDOW_SECONDS` (3 days) and is
@@ -165,7 +165,7 @@ Emits an `escrow_refunded` event.
 Allows anyone to reclaim an escrow that has passed its `expires_at` timestamp. Funds are returned to the sender. Valid only from `Locked`; unaffected by `Holdback`/holdback expiry. This prevents funds from being locked indefinitely.
 
 ### `release_expired_holdback(env, delivery_id)`
-Permissionless counterpart to `release_holdback_escrow` (Issue #192). Valid only from `Holdback`, and only once `get_holdback_window()` seconds have elapsed since `holdback_started_at`. Settles the escrow to the driver, minus the platform fee, using the same settlement logic as `release_holdback_escrow`. Reverts with `EscrowError::TimelockNotElapsed` if called early, or `EscrowError::InvalidState` if the escrow isn't in `Holdback` (e.g. it was frozen to `Paused`). Prevents a passive recipient from stranding driver funds indefinitely.
+Permissionless counterpart to `release_holdback_escrow` (Issue #192). Valid only from `Holdback`, and only once `get_holdback_window()` seconds have elapsed since `holdback_started_at`. Settles the escrow to the driver, minus the platform fee, using the same settlement logic as `release_holdback_escrow`. Reverts with `FaniLabError::TimelockNotElapsed` if called early, or `FaniLabError::InvalidState` if the escrow isn't in `Holdback` (e.g. it was frozen to `Paused`). Prevents a passive recipient from stranding driver funds indefinitely.
 
 ### `set_holdback_window(env, admin, new_window_seconds)` / `get_holdback_window(env)`
 Admin-configurable holdback window used by `release_expired_holdback`. Defaults to `DEFAULT_HOLDBACK_WINDOW_SECONDS` (3 days) and cannot be set below `MIN_HOLDBACK_WINDOW_SECONDS` (1 day).

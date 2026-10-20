@@ -145,8 +145,8 @@ impl SettlementContract {
     ///
     /// Any driver may set (or overwrite) their own preference; the caller must
     /// authenticate as the driver. Stored in persistent storage so the entry
-    /// survives independently of the contract's instance entry, and its TTL is
-    /// extended on every write (Issue #459).
+    /// survives independently of the contract's instance entry, and both the
+    /// preference and instance-entry TTLs are extended on every write (Issue #459).
     ///
     /// Emits `driver_preference_updated` so indexers can track preference
     /// changes (Issue #589).
@@ -158,6 +158,10 @@ impl SettlementContract {
         env.storage().persistent().set(&key, &to_token);
         env.storage().persistent().extend_ttl(
             &key,
+            shared_types::ttl::LEDGER_TTL_THRESHOLD,
+            shared_types::ttl::LEDGER_TTL_EXTEND_TO,
+        );
+        env.storage().instance().extend_ttl(
             shared_types::ttl::LEDGER_TTL_THRESHOLD,
             shared_types::ttl::LEDGER_TTL_EXTEND_TO,
         );

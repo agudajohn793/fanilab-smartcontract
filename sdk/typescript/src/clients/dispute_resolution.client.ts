@@ -134,6 +134,16 @@ export class DisputeResolutionClient {
   async getDispute(deliveryId: bigint, options?: ContractInvokeOptions): Promise<DisputeCase> {
     return decodeDispute(await this.invoker.call('get_dispute', [u64(deliveryId)], options));
   }
+
+  async hasDispute(deliveryId: bigint, options?: ContractInvokeOptions): Promise<boolean> {
+    return Boolean(await this.invoker.call('has_dispute', [u64(deliveryId)], options));
+  }
+
+  async getDisputesPage(page: number, pageSize: number, options?: ContractInvokeOptions): Promise<bigint[]> {
+    const offset = page * pageSize;
+    const result = await this.invoker.call('get_disputes_page', [u32(offset), u32(pageSize)], options);
+    return (result as unknown[]).map((deliveryId) => BigInt(String(deliveryId)));
+  }
 }
 
 /**

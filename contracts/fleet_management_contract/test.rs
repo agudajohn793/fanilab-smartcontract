@@ -86,7 +86,7 @@ fn test_init_sets_admin_and_counter() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1)")]
+#[should_panic(expected = "Error(Contract, #2)")]
 fn test_init_twice_panics() {
     let (_env, client, admin) = setup_test();
     client.init(&admin);
@@ -107,6 +107,18 @@ fn test_register_fleet_creates_profile_with_expected_fields() {
     assert_eq!(profile.owner, owner);
     assert_eq!(profile.treasury, treasury);
     assert_eq!(profile.total_active_drivers, 0);
+}
+
+#[test]
+fn test_register_fleet_rejects_owner_as_treasury() {
+    let (env, client, _admin) = setup_test();
+    let owner = Address::generate(&env);
+
+    let result = client.try_register_fleet(&owner, &owner);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration"),
+    }
 }
 
 #[test]
@@ -198,8 +210,8 @@ fn test_admin_reassign_fleet_owner_requires_admin() {
 
     let result = client.try_admin_reassign_fleet_owner(&attacker, &fleet_id, &new_owner);
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 
     assert_eq!(client.get_fleet(&fleet_id).owner, owner);
@@ -277,6 +289,35 @@ fn test_admin_reassign_fleet_owner_without_pending_treasury_change() {
 }
 
 #[test]
+fn test_admin_reassign_fleet_owner_rejects_treasury_address() {
+    let (env, client, admin) = setup_test();
+    let (fleet_id, _owner, treasury) = register_fleet(&env, &client);
+
+    let result = client.try_admin_reassign_fleet_owner(&admin, &fleet_id, &treasury);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration"),
+    }
+}
+
+#[test]
+fn test_admin_force_update_treasury_rejects_owner_and_current_treasury() {
+    let (env, client, admin) = setup_test();
+    let (fleet_id, owner, treasury) = register_fleet(&env, &client);
+
+    for invalid_treasury in [&owner, &treasury] {
+        let result =
+            client.try_admin_force_update_treasury(&admin, &fleet_id, invalid_treasury);
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+            _ => panic!("Expected FleetError::InvalidConfiguration"),
+        }
+    }
+
+    assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
+}
+
+#[test]
 fn test_admin_force_update_treasury_requires_admin() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, treasury) = register_fleet(&env, &client);
@@ -285,8 +326,8 @@ fn test_admin_force_update_treasury_requires_admin() {
 
     let result = client.try_admin_force_update_treasury(&attacker, &fleet_id, &new_treasury);
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 
     assert_eq!(client.get_fleet(&fleet_id).treasury, treasury);
@@ -316,6 +357,27 @@ fn test_update_fleet_treasury_does_not_apply_immediately() {
 }
 
 #[test]
+fn test_update_fleet_treasury_rejects_owner_and_current_treasury() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, treasury) = register_fleet(&env, &client);
+
+    for invalid_treasury in [&owner, &treasury] {
+        let result = client.try_update_fleet_treasury(
+            &owner,
+            &fleet_id,
+            invalid_treasury,
+            &no_co_signers(&env),
+        );
+        match result {
+            Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+            _ => panic!("Expected FleetError::InvalidConfiguration"),
+        }
+    }
+
+    assert_eq!(client.get_pending_treasury_update(&fleet_id), None);
+}
+
+#[test]
 fn test_update_fleet_treasury_emits_proposed_event_immediately() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, treasury) = register_fleet(&env, &client);
@@ -337,7 +399,7 @@ fn test_update_fleet_treasury_emits_proposed_event_immediately() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_update_fleet_treasury_rejects_non_owner() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
@@ -348,7 +410,7 @@ fn test_update_fleet_treasury_rejects_non_owner() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "Error(Contract, #13)")]
 fn test_confirm_fleet_treasury_update_before_timelock_panics() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -448,6 +510,26 @@ fn test_pending_treasury_survives_rejected_confirmation_after_deactivation() {
     assert_eq!(client.get_fleet(&fleet_id).treasury, new_treasury);
 }
 
+#[test]
+fn test_reactivate_fleet_extends_instance_ttl() {
+    use soroban_sdk::testutils::Deployer as _;
+
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    client.deactivate_fleet(&owner, &fleet_id);
+
+    env.ledger().with_mut(|ledger| {
+        ledger.sequence_number += ttl::LEDGER_TTL_EXTEND_TO - 10;
+    });
+    client.reactivate_fleet(&owner, &fleet_id);
+
+    let instance_ttl = env.deployer().get_contract_instance_ttl(&client.address);
+    assert!(
+        instance_ttl >= ttl::LEDGER_TTL_THRESHOLD,
+        "reactivate_fleet must extend the instance TTL (got {instance_ttl})"
+    );
+}
+
 // ── Issue #68 tests — add_driver_to_fleet ────────────────────────────────────
 
 #[test]
@@ -526,7 +608,7 @@ fn test_cancel_invite_allows_immediate_reinvite() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_cancel_invite_non_signer_is_rejected() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -564,7 +646,7 @@ fn test_cancel_invite_on_active_driver_panics() {
 // Issue #74 — Fleet Owner Authorization ─────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_add_driver_non_owner_is_rejected() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
@@ -754,7 +836,7 @@ fn test_remove_driver_not_in_fleet_panics() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_remove_driver_unauthorized_caller_panics() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
@@ -983,6 +1065,34 @@ fn test_get_payout_address_falls_back_when_fleet_profile_is_missing() {
     assert_eq!(event.driver, driver);
 }
 
+/// Regression: an *inactive* (deactivated) fleet profile is a routing
+/// fallback too, and must publish `payout_routing_fallback` just like the
+/// missing-profile case above — previously it returned the driver address
+/// silently.
+#[test]
+fn test_get_payout_address_falls_back_when_fleet_is_deactivated() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    client.deactivate_fleet(&owner, &fleet_id);
+    assert!(!client.get_fleet(&fleet_id).active);
+
+    // The driver is still an active fleet member, but the fleet itself is
+    // inactive, so payouts fall back to the driver — with the event emitted.
+    assert_eq!(client.get_payout_address(&driver, &fleet_id), driver);
+    let last_event = last_event(&env);
+    let topic: Symbol = Symbol::try_from_val(&env, &last_event.1.get(0).unwrap()).unwrap();
+    assert_eq!(topic, Symbol::new(&env, "payout_routing_fallback"));
+    let event: PayoutRoutingFallbackEvent =
+        PayoutRoutingFallbackEvent::try_from_val(&env, &last_event.2).unwrap();
+    assert_eq!(event.fleet_id, fleet_id);
+    assert_eq!(event.driver, driver);
+}
+
 // ── Issue #110 tests — set_identity_contract coverage ─────────────────────────
 
 #[test]
@@ -1012,7 +1122,7 @@ fn test_set_identity_contract_admin_success() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_set_identity_contract_unauthorized_caller_panics() {
     let (env, client, _admin) = setup_test();
 
@@ -1324,7 +1434,7 @@ fn test_configure_signers_requires_threshold() {
     // Fails without co-signers
     let result = client.try_configure_signers(&owner, &fleet_id, &new_signers, &1u32, &soroban_sdk::Vec::new(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
         _ => panic!("Expected threshold error"),
     }
 
@@ -1353,8 +1463,8 @@ fn test_configure_signers_unauthorized_not_owner() {
 
     let result = client.try_configure_signers(&attacker, &fleet_id, &new_signers, &2u32, &soroban_sdk::Vec::new(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1393,8 +1503,8 @@ fn test_update_fleet_treasury_unauthorized_not_signer() {
     let result =
         client.try_update_fleet_treasury(&attacker, &fleet_id, &new_treasury, &no_co_signers(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1534,8 +1644,8 @@ fn test_add_driver_unauthorized_not_signer() {
     let result =
         client.try_add_driver_to_fleet(&attacker, &fleet_id, &driver, &no_co_signers(&env));
     match result {
-        Err(Ok(err)) => assert_eq!(err, FleetError::Unauthorized.into()),
-        _ => panic!("Expected FleetError::Unauthorized"),
+        Err(Ok(err)) => assert_eq!(err, FaniLabError::Unauthorized.into()),
+        _ => panic!("Expected FaniLabError::Unauthorized"),
     }
 }
 
@@ -1580,6 +1690,58 @@ fn test_remove_driver_not_signer_but_is_driver() {
 
     let status = client.get_driver_fleet_status(&fleet_id, &driver);
     assert_eq!(status, Some(DriverFleetStatus::Removed));
+}
+
+#[test]
+fn test_driver_self_removal_removes_them_from_signers() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(owner.clone());
+    signers.push_back(driver.clone());
+    client.configure_signers(&owner, &fleet_id, &signers, &1u32, &no_co_signers(&env));
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &driver);
+    client.remove_driver_from_fleet(&fleet_id, &driver, &driver, &no_co_signers(&env));
+
+    let (remaining_signers, threshold) = client.get_fleet_signers(&fleet_id);
+    assert_eq!(remaining_signers, soroban_sdk::vec![&env, owner]);
+    assert_eq!(threshold, 1);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Removed)
+    );
+}
+
+#[test]
+fn test_driver_cannot_self_remove_if_signer_threshold_would_be_invalid() {
+    let (env, client, _admin) = setup_test();
+    let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
+    let driver = Address::generate(&env);
+
+    let mut signers = soroban_sdk::Vec::new(&env);
+    signers.push_back(owner.clone());
+    signers.push_back(driver.clone());
+    client.configure_signers(&owner, &fleet_id, &signers, &2u32, &no_co_signers(&env));
+
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &driver);
+
+    let result =
+        client.try_remove_driver_from_fleet(&fleet_id, &driver, &driver, &no_co_signers(&env));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::InvalidConfiguration.into()),
+        _ => panic!("Expected FleetError::InvalidConfiguration"),
+    }
+
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &driver),
+        Some(DriverFleetStatus::Active)
+    );
+    assert_eq!(client.get_fleet_signers(&fleet_id).0, signers);
 }
 
 // ── Cross-contract integration tests ──────────────────────────────────────────
@@ -1770,7 +1932,7 @@ fn test_admin_can_deactivate_fleet() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")]
+#[should_panic(expected = "Error(Contract, #1)")]
 fn test_deactivate_fleet_rejects_unauthorized_caller() {
     let (env, client, _admin) = setup_test();
     let (fleet_id, _owner, _treasury) = register_fleet(&env, &client);
@@ -1988,14 +2150,11 @@ fn setup_with_identity(
     identity_reputation_contract::IdentityReputationContractClient::new(env, &identity_id)
 }
 
-/// The core regression test for #451: an address that was invited but never
-/// registered in the identity/reputation contract must NOT be able to promote
-/// itself to `Active`. Such an address can never legally complete a delivery,
-/// so allowing it in permanently wastes one of the `MAX_ROSTER_SIZE`-bounded
-/// roster slots and costs the fleet owner gas to evict later.
+/// Reject unregistered addresses before creating an invitation, since they
+/// can never legally complete a delivery and would otherwise occupy a roster
+/// slot after acceptance becomes possible.
 #[test]
-#[should_panic(expected = "Error(Contract, #13)")] // FleetError::DriverNotRegistered
-fn test_accept_invite_rejected_for_unregistered_driver() {
+fn test_add_invite_rejected_for_unregistered_driver() {
     let (env, client, admin) = setup_test();
     let identity = setup_with_identity(&env, &client, &admin);
 
@@ -2003,19 +2162,21 @@ fn test_accept_invite_rejected_for_unregistered_driver() {
     let unregistered = Address::generate(&env);
     assert!(!identity.has_driver_profile(&unregistered));
 
-    client.add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
-    // The invite is genuinely Pending, so the only thing that can reject this
-    // is the registration check.
+    let result =
+        client.try_add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, FleetError::DriverNotRegistered.into()),
+        _ => panic!("Expected FleetError::DriverNotRegistered"),
+    }
+
     assert_eq!(
         client.get_driver_fleet_status(&fleet_id, &unregistered),
-        Some(DriverFleetStatus::Pending)
+        None
     );
-
-    client.accept_fleet_invite(&fleet_id, &unregistered);
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
 }
 
-/// The same unregistered address must still be able to accept after registering
-/// — the check gates on profile existence, not on a permanent blacklist.
+/// Once registered, a driver can receive and accept an invitation.
 #[test]
 fn test_accept_invite_succeeds_once_driver_registers() {
     let (env, client, admin) = setup_test();
@@ -2024,8 +2185,8 @@ fn test_accept_invite_succeeds_once_driver_registers() {
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
     let driver = Address::generate(&env);
 
-    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
     identity.register_driver(&driver);
+    client.add_driver_to_fleet(&owner, &fleet_id, &driver, &no_co_signers(&env));
     client.accept_fleet_invite(&fleet_id, &driver);
 
     assert_eq!(
@@ -2035,26 +2196,38 @@ fn test_accept_invite_succeeds_once_driver_registers() {
     assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
 }
 
-/// A rejected acceptance must leave no trace: the invite stays `Pending` and no
-/// roster slot is consumed, so the fleet owner is never billed to evict the
-/// address.
+/// A rejected invitation must leave no trace, and the same address can be
+/// invited after registration without an eviction or cleanup transaction.
 #[test]
-fn test_rejected_acceptance_does_not_consume_roster_slot() {
+fn test_rejected_invitation_leaves_no_slot_and_can_be_retried() {
     let (env, client, admin) = setup_test();
-    let _identity = setup_with_identity(&env, &client, &admin);
+    let identity = setup_with_identity(&env, &client, &admin);
 
     let (fleet_id, owner, _treasury) = register_fleet(&env, &client);
     let unregistered = Address::generate(&env);
-    client.add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
 
-    let result = client.try_accept_fleet_invite(&fleet_id, &unregistered);
+    let result = client.try_add_driver_to_fleet(
+        &owner,
+        &fleet_id,
+        &unregistered,
+        &no_co_signers(&env),
+    );
     assert!(result.is_err());
 
     assert_eq!(
         client.get_driver_fleet_status(&fleet_id, &unregistered),
-        Some(DriverFleetStatus::Pending)
+        None
     );
     assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 0);
+
+    identity.register_driver(&unregistered);
+    client.add_driver_to_fleet(&owner, &fleet_id, &unregistered, &no_co_signers(&env));
+    client.accept_fleet_invite(&fleet_id, &unregistered);
+    assert_eq!(
+        client.get_driver_fleet_status(&fleet_id, &unregistered),
+        Some(DriverFleetStatus::Active)
+    );
+    assert_eq!(client.get_fleet(&fleet_id).total_active_drivers, 1);
 }
 
 /// Deployments that never configure an identity contract keep the pre-#451

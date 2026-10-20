@@ -4,7 +4,7 @@
 
 import { ContractInvokeOptions } from '../types/common.types';
 import * as SettlementTypes from '../types/settlement.types';
-import { ContractInvoker, address, i128, u64 } from './invoker';
+import { ContractInvoker, address, i128 } from './invoker';
 
 export class SettlementClient {
   private readonly invoker: ContractInvoker;
@@ -14,7 +14,7 @@ export class SettlementClient {
   }
 
   async init(params: SettlementTypes.InitParams, options?: ContractInvokeOptions): Promise<void> {
-    await this.invoker.call('init', [address(params.admin)], options);
+    await this.invoker.call('init', [address(params.admin), address(params.escrowContract)], options);
   }
 
   async getAdmin(options?: ContractInvokeOptions): Promise<string> {
@@ -24,6 +24,13 @@ export class SettlementClient {
   async getDriverPreference(driver: string, options?: ContractInvokeOptions): Promise<string | null> {
     const value = await this.invoker.call('get_driver_preference', [address(driver)], options);
     return value === null || value === undefined ? null : String(value);
+  }
+
+  async setDriverPreference(
+    params: SettlementTypes.SetDriverPreferenceParams,
+    options?: ContractInvokeOptions
+  ): Promise<void> {
+    await this.invoker.call('set_driver_preference', [address(params.driver), address(params.toToken)], options);
   }
 
   async executeSettlementSwap(

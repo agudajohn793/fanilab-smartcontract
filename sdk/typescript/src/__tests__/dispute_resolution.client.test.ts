@@ -95,4 +95,23 @@ describe('DisputeResolutionClient evidence hash decoding', () => {
     expect(dispute.deliveryId).toBe(9n);
     expect(dispute.status).toBe(DisputeStatus.Open);
   });
+
+  test('hasDispute calls the presence getter with a u64 delivery ID', async () => {
+    callMock.mockResolvedValue(true);
+
+    await expect(client.hasDispute(9n)).resolves.toBe(true);
+
+    expect(callMock).toHaveBeenCalledWith('has_dispute', [{ kind: 'u64', value: 9n }], undefined);
+  });
+
+  test('getDisputesPage converts the page to contract offset and decodes delivery IDs', async () => {
+    callMock.mockResolvedValue([9n, 10n]);
+
+    await expect(client.getDisputesPage(2, 5)).resolves.toEqual([9n, 10n]);
+
+    expect(callMock).toHaveBeenCalledWith('get_disputes_page', [
+      { kind: 'u32', value: 10 },
+      { kind: 'u32', value: 5 },
+    ], undefined);
+  });
 });
