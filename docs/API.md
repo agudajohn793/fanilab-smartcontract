@@ -86,7 +86,7 @@ Initialize the escrow contract with admin and platform settings.
 
 **Parameters:**
 - `admin: Address` - Admin account with privileged operations
-- `token: Address` - Token contract used for escrow payments
+- `token: Address` - Configured Stellar token contract; must implement the token `decimals()` interface
 - `platform_fee_bps: u32` - Platform fee in basis points (e.g., 250 = 2.5%)
 
 **Authorization:** Contract deployer
@@ -1657,10 +1657,12 @@ the same removal using a second `remove_admin` call.
 
 **Errors:**
 - `Unauthorized` - Caller is not an admin
+- `InvalidState` - The target is not an admin, the final admin would be removed, or the same admin attempts to approve their own proposal
 
 **Example:**
 ```rust
-dispute_contract.remove_admin(&current_admin, &old_admin);
+dispute_contract.remove_admin(&first_admin, &old_admin); // proposal
+dispute_contract.remove_admin(&second_admin, &old_admin); // confirmation
 ```
 
 #### `set_identity_reputation_contract`

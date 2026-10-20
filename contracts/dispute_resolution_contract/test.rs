@@ -2462,4 +2462,3 @@ fn test_dispute_resolution_transitions_delivery_to_resolved_across_all_paths() {
     let delivery3 = MockDeliveryContractClient::new(&env, &delivery_id).get_delivery(&did(103));
     assert_eq!(delivery3.status, DeliveryStatus::Resolved);
 }
-

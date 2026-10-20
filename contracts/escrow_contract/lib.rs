@@ -194,6 +194,17 @@ fn validate_volume_tiers(env: &Env, tiers: &soroban_sdk::Vec<VolumeTier>) {
     }
 }
 
+fn validate_token_contract(env: &Env, token: &Address) {
+    let result = env.try_invoke_contract::<u32, soroban_sdk::Error>(
+        token,
+        &Symbol::new(env, "decimals"),
+        soroban_sdk::vec![env],
+    );
+    if !matches!(result, Ok(Ok(_))) {
+        panic_with_error!(env, EscrowError::InvalidToken);
+    }
+}
+
 fn get_effective_fee_bps(env: &Env, base_fee_bps: u32, sender_volume: u32) -> u32 {
     let tiers: Option<soroban_sdk::Vec<VolumeTier>> =
         env.storage().persistent().get(&DataKey::VolumeTiers);
@@ -679,6 +690,7 @@ impl EscrowContract {
         if platform_fee_bps > constants::MAX_PLATFORM_FEE_BPS {
             panic_with_error!(&env, EscrowError::InvalidFee);
         }
+        validate_token_contract(&env, &token);
         env.storage().instance().set(&StorageKey::Admin, &admin);
         save_protocol_config(
             &env,
@@ -1074,6 +1086,7 @@ impl EscrowContract {
         if token != config.token {
             panic_with_error!(&env, EscrowError::InvalidToken);
         }
+        validate_token_contract(&env, &token);
         // Issue #295: when a delivery contract is configured, cross-call it to
         // confirm the delivery exists and that the supplied recipient/driver
         // match the delivery record. Skipped when unconfigured so existing
